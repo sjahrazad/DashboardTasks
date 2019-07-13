@@ -1,0 +1,3848 @@
+<?php namespace ProcessWire;
+
+/**
+ * MD Collabs
+ *
+ * Collaboration and Sharing tool for simple tasks
+ * management in a team through Email /SMS.
+ *
+ * Task Roles: task-manager, task-owner, task-user
+ *
+ * Monchu MaxDev.com.au
+ *
+ * 7 July 2019
+ * https://github.com/sjahrazad/DashboardTasks
+ *
+ * Based on Dashboard Notes by
+ * Francis Otieno (Kongondo)
+ * @credits: Szabesz - for help with code cleanup and CSS
+ *
+ * ProcessWire 3.x
+ * Copyright (C) 2016 by Ryan Cramer
+ *
+ * Licensed under MIT v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ *
+ */
+
+class ProcessDashboardTasks extends Process implements Module {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'MD COLLABS',
+			'summary' => 'Simple Task Management - Collaboration and Sharing Messages',
+			'author' => 'Monchu',
+			'version' => '0.0.1',
+			'href' => 'https://maxdev.com.au/',
+			'singular' => true,
+			'autoload' => false,
+			'permission' => 'dashboard-tasks',
+			'requires' => 'FieldtypeComments'
+		);
+	}
+
+	const PAGE_NAME = 'dashboard-tasks';
+	private $urlSeg1;
+	private $baseURL;
+	private $dateFormat;
+	private $pageNumStr;
+	private $pageNumParamStr;
+	private $noSettings;
+	private $taskTextColour;
+	private $taskBackgroundColour;
+	private $task;
+	private $settings;
+	private $groupSettings;
+
+	public function init() {
+		$user = $this->wire('user');
+		$permissions = $this->wire('permissions');
+
+		if ($permissions->get('dashboard-tasks')->id && !$user->hasPermission('dashboard-tasks'))
+			 throw new WirePermissionException("You have no permission to use this module");
+
+		$this->noSettings = $permissions->get('dashboard-tasks-settings')->id && !$user->hasPermission('dashboard-tasks-settings') ? true : false;
+		$this->groupSettings = $permissions->get('dashboard-tasks-owners')->id && !$user->hasPermission('dashboard-tasks-owners') ? true : false;
+
+		$this->settings = new WireData();
+		$this->baseURL = $this->wire('config')->urls->admin . "dashboard-tasks";
+
+		$input = $this->wire('input');
+		$sanitizer = $this->wire('sanitizer');
+		$this->urlSeg1 =  $sanitizer->pageName($input->urlSegment1);
+
+		$pageNumParamStr = $sanitizer->fieldName($input->page);
+		$this->pageNumParamStr = $pageNumParamStr ? $pageNumParamStr : "";
+
+		$this->pageNumStr = $input->pageNumStr();
+
+		$this->setGlobalTaskValues();
+
+		$dateFormats = array(1=>"d/m/Y", 2=>"Y/m/d",3=>"m/d/Y");
+		$dateFormat = $dateFormats[$this->settings->dateFormat];
+
+		if($this->settings->dateMonthLabel == 2) $dateFormat = str_replace(array("/","m"),array(" ","F"), $dateFormat);
+		$this->dateFormat = $dateFormat;
+
+		if('edit' == $this->urlSeg1 || 'view' == $this->urlSeg1) {
+			$this->setTaskValues();
+		}
+
+		if('edit' == $this->urlSeg1 || 'settings' == $this->urlSeg1) {
+			$this->scriptConfigurations();
+			$config = $this->wire('config');
+			$url = $config->urls->ProcessDashboardTasks;
+			$config->styles->add($url . "vendor/pickr/pickr.min.css");
+			$config->scripts->add($url . "vendor/pickr/pickr.min.js");
+		}
+
+		parent::init();
+	}
+
+	protected function scriptConfigurations() {
+		$colourPickerSave = $this->_('Set');
+		$colourPickerClear = $this->_('Clear');
+		$taskTextColour = 0 === $this->taskTextColour ? $this->taskTextColour : "rgba({$this->taskTextColour})";
+		$taskBackgroundColour = 0 === $this->taskBackgroundColour ? $this->taskBackgroundColour : "rgba({$this->taskBackgroundColour})";
+		$options = array('config' =>
+			array(
+				'colourPickerDefaultTextColour' => $taskTextColour,
+				'colourPickerDefaultBackgroundColour' => $taskBackgroundColour,
+				'colourPickerSave' => $colourPickerSave,
+				'colourPickerClear' => $colourPickerClear,
+			)
+		);
+		$scripts = $this->wire('config')->js($this->className(), $options);
+		return $scripts;
+	}
+
+	/* ######################### - VIEWS - ######################### */
+	/**
+	 * Landing page for Dashboard Tasks.
+	 */
+
+	public function ___execute() {
+		$out = '';
+		$pgOut = '';
+		$modules = $this->wire('modules');
+		$this->headline($this->settings->taskGlobalTaskLabel);
+		$out .= "<section style='border-top:3px solid rgba(".$this->settings->backgroundColour."); border-bottom:10px solid rgba(".$this->settings->backgroundColour.");'>";
+
+		/**
+		 * task-manager role
+		 *
+		 * Lock/Unlock, change case /priority status
+		 * Manage Global settings
+		 *
+		 */
+		if (($this->wire('user')->hasRole('superuser')) || $this->wire('user')->hasPermission('dashboard-tasks-settings')) {
+			$actions = array(
+				'lock' => $this->_('Lock'),
+				'unlock' => $this->_('Unlock'),
+				'priority_low' => $this->_('Low Priority'),
+				'priority_normal' => $this->_('Normal Priority'),
+				'priority_high' => $this->_('High Priority'),
+				'status_open' => $this->_('Case Open'),
+				'status_closed' => $this->_('Case Closed'),
+				'status_pending' => $this->_('Case Pending'),
+				'trash' => $this->_('Trash'),
+				'delete' => $this->_('Delete'),
+			);
+		}
+
+		else {
+			$actions = array(
+				'priority_low' => $this->_('Low Priority'),
+				'priority_normal' => $this->_('Normal Priority'),
+				'priority_high' => $this->_('High Priority'),
+				'delete' => $this->_('Delete'),
+			);
+		}
+
+		$tasks = $this->getTasks();
+
+		if($tasks->count()) {
+			$start = $tasks->getStart();
+			$limit = $tasks->getLimit();
+			$end = $start+$tasks->count();
+			$total = $tasks->getTotal();
+			$headline = sprintf(__('%1$d to %2$d of %3$d'), $start+1, $end, $total);
+			if($total > $limit) {
+				// $pager = $modules->get('MarkupPagerNav');
+				#Solution for pagination when using URL segments
+				// get the url segment string.
+				$url = $this->wire('page')->url . $this->wire('input')->urlSegmentsStr;
+				$pgOut = $tasks->renderPager(array('baseUrl' => $url));
+			}
+		}
+		elseif(strlen($this->pageNumStr)) $this->wire('session')->redirect($this->baseURL);
+
+		/**
+		 * render a help content for new user
+		 */
+		else {
+			$settingsParent = $this->wire('config')->urls->admin."dashboard-tasks/";
+			$limitSettings = $this->wire('pages')->get('template=dashboard-tasks,parent='.$settingsParent.',include=all');
+			$headtask = json_decode($limitSettings->dashboard_tasks_settings)->taskGlobalTaskLabel;
+
+			$out = '';
+			if(($headtask == "") && ($this->wire('user')->hasRole('task-manager'))) {
+				$out .= "
+				<p>Hi ".$this->wire('user')->name.", you need to configure the Global Settings first before use this module.</p>
+				<p><button class='uk-button uk-button-default'><a href='/dashboard/dashboard-tasks/settings/'>Global Settings</a></button></p>";
+			}
+
+			if(($headtask == "") && (!$this->wire('user')->hasRole('task-manager'))) {
+				$out .= "<p>Hi ".$this->wire('user')->name.", this module is not activated yet.</p>";
+			}
+
+			if($headtask != "") $out .= "<p>Hi ".$this->wire('user')->name.", you don't have any task assigned yet, so enjoy your coffee for today <i class='fa fa-lg fa-coffee'></i>.</p>";
+			if($headtask != "") $out .= "<p>Please read the user guidelines below, or just start to create your new Collabs Task here <button class='uk-button uk-button-default'><a href='/dashboard/dashboard-tasks/edit/'>Add New MD Collabs</a></button></p>";
+			if($headtask != "") $out .= $this->renderHelp();
+			return $out;
+		}
+
+		###############
+
+		// create form for adding new task (page)
+		$form = $modules->get('InputfieldForm');
+		$form->attr('id', 'dn_tasks_bulk');
+		$form->action = './';
+		$form->method = 'post';
+
+		// select dropdown
+		$f = $modules->get('InputfieldSelect');
+		$f->attr('id+name', 'dn_action_select');
+		$f->addOptions($actions);
+		$actions = $f->render();
+
+		$topPanel =
+			"<div id='dn_top_panel' class='dn_top_panel'>" .
+				"<div id='dn_menu_actions_wrapper' data-uk-grid class='uk-grid'>" .
+					"<div class='uk-width-expand uk-first-column'>" . $this->renderMenu($actions) . "</div>" .
+				"</div>" .
+			"</div>";
+
+		// top pagination panel
+		//if ($pgOut) $topPaginationPanel = "<div id='top_pager'>" . $pgOut . "</div>";
+		$topPaginationPanel = "<div id='top_pager'><p class='task-content-menu txt-bold'>{$this->settings->taskGlobalTaskLabel} {$headline}</p></div>";
+
+		// rendered tasks
+		$tasksMarkup = "<div id='dn_tasks_container'>" . $this->renderTasks($tasks) . "</div>";
+
+		// bottom pagination panel
+		$bottomPaginationPanel = "<div id='bottom_pager'>{$pgOut}</div><p class='task-content-menu txt-bold'>{$this->settings->taskGlobalTaskLabel} {$headline}</p>";
+
+		$finalMarkup = $topPanel . $topPaginationPanel . $tasksMarkup . $bottomPaginationPanel . $this->renderShiftSelectMarkup();
+
+		$f = $modules->get('InputfieldMarkup');
+		$f->attr('value', $finalMarkup);
+
+		$form->add($f);
+
+		// hidden input to store param string for pagination. Helps with redirection after bulk action.
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_pagination_num');
+		$f->attr('value', $this->pageNumStr);
+		$form->add($f);
+
+		// apply (save) button
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_actions_btn');
+		$f->icon = 'check-square-o';
+		$f->showInHeader();
+		$f->class .= ' dn_hide';
+		$f->attr('value', $this->_('Apply'));
+		$form->add($f);
+		// post: saving all task settings
+		$post = $this->wire('input')->post;
+
+		//private function save($form)
+		if($post->dn_actions_btn) $this->save($form);
+
+		$out .= $form->render();
+		$out .= "</section>";
+		$out .= $this->renderTaskMenu();
+		$out .= $this->renderFooterMenu();
+		return $out;
+	}
+
+	public function ___executeView() {
+		$task = $this->task;
+		$startDateLabel = $this->_('Start Date:');
+		$endDateLabel = $this->_('Due Date:');
+
+		$taskMember = '';
+		$taskMembers = '';
+
+		/**
+		 * document ref for task page
+		 * ProcessDashboardDocs module
+		 */
+
+		$docParent = '';
+		$docParentFiles = '';
+		$docFile = '';
+
+		if ($this->wire('input')->urlSegment2 == "") $this->wire('session')->redirect($this->baseURL);
+
+		if(!$this->checkAccess($this->task)) {
+			$this->error($this->_('You have no access to this task!'));
+			$this->wire('session')->redirect($this->baseURL);
+		}
+
+		$parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+
+		$docParent = $this->wire('pages')->get("parent=$parent, template=admin, include=all, name=dashboard-docs");
+
+		if($docParent->id && $docParent->id > 0) {
+			$docParent = $this->wire('config')->urls->admin."".$docParent->name."/docs/";
+			$docParentFiles = $this->wire('pages')->get($docParent);
+		}
+
+		$out = '';
+		//$out .= $this->renderTaskMenu();
+		$out .= "<section style='border-top:3px solid rgba(".$this->settings->backgroundColour."); border-bottom:10px solid rgba(".$this->settings->backgroundColour.");'>";
+		$editMarkup = '';
+		if($this->checkEdit($task)) {
+			$urlParamPageNumStr = $this->wire('input')->page ? "?page=" . $this->wire('input')->page : "";
+			$editURL = $this->baseURL . "/edit/{$task->id}/{$urlParamPageNumStr}";
+			$editClass = 'dn_back_to_edit';
+			$editIcon = "<i class='fa fa-lg fa-pencil-square-o'></i>";
+			$viewEditDividerMarkup = "<span class='dn_task_back_edit_divider'>&#47;</span>";
+			$editMarkup = $viewEditDividerMarkup ."<a href='{$editURL}' class='{$editClass}'>" . $editIcon . "</a>";
+		}
+
+		if($task->startDate) {
+			$startDateLabel = $this->_($startDateLabel);
+			if($task->startTime) $startDate = $task->startDate."<br />at ".$task->startTime;
+			if(!$task->startTime) $startDate = $task->startDate;
+		}
+		if($task->endDate) {
+			$endDateLabel = $this->_($endDateLabel);
+			if($task->endTime) $endDate = $task->endDate."<br />at ".$task->endTime;
+			if(!$task->endTime) $endDate = $task->endDate;
+		}
+
+		$date = date($this->dateFormat, $task->created);
+
+		if(($this->wire('user')->name == $task->createdUser->name) ||  ($this->wire('user')->name == $task->taskJobAcceptanceName))
+			$taskSubject = "<a href='".$this->wire('config')->urls->admin."dashboard-tasks/edit/".$task->id."/'><i class='fa fa-pencil fa-lg'></i>".$task->subject."</a>";
+		//if($this->wire('user')->name != $task->taskJobAcceptanceName) $taskSubject = $task->subject;
+
+		$author = $task->createdUser->name;
+
+		$this->headline($task->title);
+		$taskPriority = str_repeat("&#42;",$task->priority);
+		$taskStatus = str_repeat("&#42;",$task->status);
+
+		// grab the comment text and clean it
+		//$text = htmlentities($task->text, ENT_QUOTES, "UTF-8");
+		$text = $task->text;
+		//$text = str_replace("\n\n", "<p></p>", $text);
+		//$text = str_replace("\n", "<br />", $text);
+		//$text = str_replace("*", "<span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>", $text);
+
+		// Badge
+		if($task->priority == 1) $tPriority = "<span class='uk-badge priority-high'>1</span>";
+		if($task->priority == 2) $tPriority = "<span class='uk-badge priority-high'>2</span>";
+		if($task->priority == 3) $tPriority = "<span class='uk-badge priority-high'>3</span>";
+		if(!$task->priority) $tPriority = "<span class='uk-badge priority-normal'>2</span>";
+
+		if($task->status == 1) $tStatus = "Open";
+		if($task->status == 2) $tStatus = "Closed";
+		if($task->status == 3) $tStatus = "Pending";
+		if(!$task->status) $tStatus = "Open";
+
+		if($task->taskJobAcceptance) $tJobStatus = $task->taskJobAcceptanceStatus;
+		if($task->taskJobAcceptance) $tStatus = $tStatus."<br />".$this->_('This Task has been')." ".$tJobStatus." by ". $task->taskJobAcceptanceName." on ".$task->taskJobAcceptanceDate." ".$task->taskJobAcceptanceTime;
+
+		$metaDivider = "&#47;";
+
+		if ($task->limitVisibility == 1) {
+			$taskMembers = "All";
+		}
+
+		if ($task->limitVisibility == 4) {
+			foreach($task->limitVisibilityIDs as $item) {
+				foreach($this->wire('users') as $user) {
+					if (($item == $user->id) && ($author != $user->name)) {
+						$taskMember .= $user->name .", ";
+					}
+				}
+			}
+			$taskMembers = $taskMember." ".$author;
+		}
+
+
+		if (count($docParentFiles->children)) {
+
+			$docFile .= "<ul style='border-top:1px solid rgba(".$this->settings->backgroundColour."); margin-top:20px; font-size:small; display: grid; grid-template-columns: 28px auto;'>";
+			foreach($docParentFiles->children as $doc) {
+				// make sure doc belong to task owner
+				if ($doc->name == $task->taskTrn) {
+
+					if(($this->wire('user')->name == $task->submitterName) ||  ($this->wire('user')->name == $task->taskJobAcceptanceName)) $docFile .= '<li><i class="fa fa-pencil span-doc"></i></li><li><a href="'.$this->wire('config')->urls->admin.'page/edit/?id='.$doc->id.'"><strong>'.$this->settings->taskGlobalTaskLabel.' '.$this->settings->taskDocumentsLabel.' '.$this->_('Editor').'</strong></a></li>';
+
+					if($this->wire('user')->name != $task->submitterName) $docFile .= '<li><i class="fa fa-file span-doc"></i></li><li><strong>'.$this->settings->taskGlobalTaskLabel.' '.$this->settings->taskDocumentsLabel.'</strong></li>';
+
+					if($doc->dashboard_task_body) $docFile .= '</li><li><li><details><summary>'.$this->settings->taskGlobalButtonEditDocumentLabel.'</summary>'.$doc->dashboard_task_body.'</details></li>';
+
+					if($doc->dashboard_task_files) {
+						foreach($doc->dashboard_task_files as $item) {
+							$docFile .= '<li><i class="fa fa-file-pdf-o span-doc"></i></li><li><a href="'.$item->url.'">'.$item->name.'</a></li>';
+						}
+					}
+
+					if(count($doc->dashboard_task_images)) {
+						$imgStyle = 'style="
+							display:grid;
+							list-style:none;
+							grid-template-columns:repeat(auto-fill,minmax('.$this->settings->width.'px,1fr));
+							grid-gap:'.$this->settings->gridGap.'px;
+							"';
+
+						$docFile .= '<li><i class="fa fa-image span-doc"></i></li><li><ul '.$imgStyle.'>';
+						foreach($doc->dashboard_task_images as $item) {
+							$docFile .= '<li><a href="'.$item->url.'"><img src="'.$item->url.'" alt="'.$item->name.'" desc="'.$item->desc.'"></a></li>';
+						}
+						$docFile .= '</ul></li>';
+					}
+
+					if($doc->dashboard_task_url_reference) $docFile .= '<li><i class="fa fa-link span-doc"></i></li><li><a href="'.$doc->dashboard_task_url_reference.'">Document URL</a></li>';
+
+				}
+			}
+			$docFile .= "</ul>";
+		}
+		else {
+			$docFile = "";
+		}
+
+		$out .= "<div id='dn_single_task'>";
+		$out .= "
+			<header id='task-sub-header' class='task-sub-header'>" .
+				"<ul class='task-meta'>" .
+				"<li></li>" .
+				"<li><a href='{$this->baseURL}/{$this->pageNumParamStr}' class='dn_back_to_all_tasks'><i class='fa fa-fw fa-arrow-circle-left'></i>" . $this->_('View All') . "</a>" .$editMarkup. "</li>" .
+				"</ul>" .
+			"</header>" .
+			"<section id='task-subject' class='task-subject'>" .
+				"<h2>{$taskSubject}</h2>" .
+				"</section>" .
+				"<main id='task_text' class='task-text'>{$text}</main>" .
+			"<section id='task-footer' style='border-top:1px solid rgba(".$this->settings->backgroundColour.");border-bottom:5px solid rgba(".$this->settings->backgroundColour.");'>";
+
+		/**
+		 * task type 2 is a Task Scheduler with Date fields
+		 * only available for task-owner role
+		 */
+
+		if ($task->taskType == 2) {
+			$out .=	"
+			<details>
+				<ul class='task-date'>
+					<li><strong>Priority</strong></li><li>{$tPriority}</li><li class='txt-right txt-bold'>{$startDateLabel}</li><li class='txt-right txt-bold'>{$endDateLabel}</li>
+					<li><strong>Case</strong></li><li>{$tStatus}</li><li class='txt-right'>{$startDate}</li><li class='txt-right'>{$endDate}</li>
+				</ul>
+				<ul class='task-list'>
+					<li><strong>{$this->settings->taskGlobalLocationLabel}:</strong></li><li>{$task->location}</li>
+					<li><strong>{$this->settings->taskGlobalMembersLabel}:</strong></li><li>{$taskMembers}</li>
+					<li><strong>{$this->settings->taskGlobalOwnersLabel}:</strong></li><li>{$author}</li>
+					<li><strong>{$this->settings->taskGlobalSubmittedLabel} on:</strong></li><li>{$date}</li>
+				</ul>
+			</details>
+				";
+		}
+
+		$out .=		$docFile .
+				"</section>
+				<details><summary><h3>{$this->settings->taskGlobalRespondLabel}</h3></summary>" .
+				$this->renderReplyMarkup();
+		$out .= "</details>";
+		$out .= "</div>";
+		$out .= "</section>";
+		$out .= $this->renderTaskMenu();
+		$out .= $this->renderFooterMenu();
+		return $out;
+	}
+
+	public function ___executeEdit() {
+
+		$task = $this->task;
+
+		/**
+		 * Task Status Lock or Case Closed
+		 * Redirect
+		 */
+
+		if((1 == $task->locked) && !$this->wire('user')->hasRole('task-manager')) {
+			$this->warning($this->_('The is locked for edits. Unlock it first to edit.'));
+			$this->wire('session')->redirect($this->baseURL);
+		}
+
+		if((2 == $task->status) && !$this->wire('user')->hasRole('task-manager')) {
+			$this->warning($this->_('This case status is closed, to open the case back contact your manager.'));
+			$this->wire('session')->redirect($this->baseURL);
+		}
+
+		if ($task->dashboard_tasks_settings->taskJobAcceptanceName == $user->name) $editOther = true;
+		if ($task->dashboard_tasks_settings->taskJobAcceptanceName != $user->name) $editOther = $this->checkEdit($task);
+
+		if((!$this->checkAccess($this->task)) || (!$editOther)) {
+			$this->error($this->_('You have no access to this task!'));
+			$this->wire('session')->redirect($this->baseURL);
+		}
+
+		$out = '';
+		$out .= "<section style='border-top:3px solid rgba(".$this->settings->backgroundColour."); border-bottom:10px solid rgba(".$this->settings->backgroundColour.");'>";
+		$modules = $this->wire('modules');
+		$viewMarkup = '';
+
+		$warningNoticeNoVisibilityIDsSet = $this->_('Please task that if nothing is selected here, irrespective of your visibility setting, all tasks will be visible to everyone with access to Dashboard Tasks!');
+
+		if($task->title) {
+			if(1 == $task->locked) $this->warning($this->_('This task is locked for edits. Unlock it first to edit.'));
+
+			$headline = $task->title;
+			$date = date($this->dateFormat, $task->created);
+
+			$author = $task->createdUser->name;
+
+			$taskPriority = str_repeat("&#42;",$task->priority);
+			$taskStatus = str_repeat("&#42;",$task->status);
+
+			$metaDivider = "&#47;";
+			$meta = "{$date} {$metaDivider} {$author} {$metaDivider} <span class='dn_task_priority_meta'>{$taskPriority} {$taskStatus}</span>";
+
+			$urlParamPageNumStr = $this->wire('input')->page ? "?page=" . $this->wire('input')->page : "";
+			$viewURL = $this->baseURL . "/view/{$task->id}/{$urlParamPageNumStr}";
+			$viewClass = 'dn_back_to_edit';
+			$viewIcon = "<i class='fa fa-lg fa-eye'></i>";
+			$viewEditDividerMarkup = "<span class='dn_task_back_view_divider'>&#47;</span>";
+			$viewMarkup = $viewEditDividerMarkup ."<a href='{$viewURL}' class='{$viewClass}'>" . $viewIcon . "</a>";
+		}
+
+		else {
+			$headline = $this->_('Add New');
+			$meta = '';
+		}
+
+		$this->headline($headline);
+
+		$out .=
+			"<div id='dn_single_task'>" .
+				"<a href='{$this->baseURL}/{$this->pageNumParamStr}' class='dn_back_to_all_tasks'><i class='fa fa-fw fa-arrow-circle-left'></i>" . $this->_('Back to all tasks') . "</a>" .
+				$viewMarkup .
+				"<header class='uk-comment-header'>" .
+					"<div class='uk-comment-meta'>{$meta}</div>".
+				"</header>" .
+			"</div>";
+
+		$form = $modules->get('InputfieldForm');
+		$form->attr('id', 'dn_task_edit');
+		$form->action = './';
+		$form->method = 'post';
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('name', 'dn_task_page_id');
+		$f->attr('value', (int) $task->id);
+		$form->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('name', 'dn_task_edit_title');
+		$f->attr('value', $task->title);
+		$form->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('name', 'dn_task_title');
+		$f->attr('value', $task->title);
+		$form->add($f);
+
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('name', 'dn_task_owner_id');
+		$f->attr('value', $this->wire('user')->id);
+		$form->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('name', 'dn_task_owner_name');
+		$f->attr('value', $this->wire('user')->name);
+		$form->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('name', 'dn_task_owner_email');
+		$f->attr('value', $this->wire('user')->email);
+		$form->add($f);
+
+
+		/**
+		 * task selection
+		 * 1 Notes, 2 Task Scheduler, 3 Reports
+		 */
+
+		if(!$task->taskType) {
+			$f = $modules->get('InputfieldSelect');
+			$f->attr('name', 'dn_task_types');
+			$f->attr('value', $task->taskType);
+			$f->label = $this->_('Select Task Type');
+			$f->required = true;
+			$f->addOption('','');
+			$f->addOption('1',$this->settings->taskNotesLabel);
+			$f->addOption('2',$this->settings->taskSchedulerLabel);
+			$f->addOption('3',$this->settings->taskReportsLabel);
+			$form->add($f);
+		}
+		else {
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_types');
+			$f->attr('value', $task->taskType);
+			$form->add($f);
+		}
+
+		if(!$task->title) {
+			$f = $modules->get('InputfieldMarkup');
+			$f->attr('id+name', 'tasktype1');
+			$f->attr('value', '<p class="task-help">Broadcast and Shared your ideas to the Collabs team</p>');
+			$f->showIf ='dn_task_types=1';
+			$form->append($f);
+
+			$f = $modules->get('InputfieldMarkup');
+			$f->attr('id+name', 'tasktype2');
+			$f->attr('value', '<p class="task-help">Enquiry type with Dates and Times. Assign a task action to the team</p>');
+			$f->showIf ='dn_task_types=2';
+			$form->append($f);
+
+			$f = $modules->get('InputfieldMarkup');
+			$f->attr('id+name', 'tasktype3');
+			$f->attr('value', '<p class="task-help">Private Notes</p>');
+			$f->showIf ='dn_task_types=3';
+			$form->append($f);
+		}
+
+		/**
+		 * page title and name will be used to generate
+		 * ticket reference number - TRN
+		 * user only use subject field
+		 * also for Email subject
+		 */
+		/**
+		 * Job Acceptance mode
+		 * Restore value
+		 */
+		if ($task->taskJobAcceptance == 1) {
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_owner_id');
+			$f->attr('value', $task->taskOwnerID);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_owner_name');
+			$f->attr('value', $task->taskOwnerName);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_owner_email');
+			$f->attr('value', $task->taskOwnerEmail);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance');
+			$f->attr('value', $task->taskJobAcceptance);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance_status');
+			$f->attr('value', $task->taskJobAcceptanceStatus);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance_id');
+			$f->attr('value', $task->taskJobAcceptanceID);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance_name');
+			$f->attr('value', $task->taskJobAcceptanceName);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance_email');
+			$f->attr('value', $task->taskJobAcceptanceEmail);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance_date');
+			$f->attr('value', $task->taskJobAcceptanceDate);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_job_acceptance_time');
+			$f->attr('value', $task->taskJobAcceptanceTime);
+			$form->add($f);
+
+		}
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_subject');
+		$f->attr('value', $task->subject);
+		if(!$task->title) $f->label = $this->_('Subject');
+		if($task->title) $f->label = $this->_('Edit Subject');
+		$f->maxlength = 320;
+		$f->showCount =1;
+		$f->showIf = 'dn_task_types!=""';
+		$f->required = true;
+		$form->add($f);
+
+		$f = $this->modules->get('InputfieldCKEditor');
+		$f->attr('id+name', 'dn_task_text');
+		$f->attr('value', $task->text);
+		if(!$task->title) $f->label = $this->_('Content');
+		if($task->title) $f->label = $this->_('Edit Content');
+		$f->notes = $this->_('* required fields');
+		$f->maxlength = 1920;
+		$f->showCount =1;
+		$f->required = true;
+		$f->showIf = 'dn_task_types!=""';
+		$f->rows = 12;
+		$f->toolbar = 'Format,Bold,Italic,BulletedList,Link,Unlink';
+		$form->add($f);
+
+		/**
+		 * Title Tag
+		 * page title output Task Type and Title Tag
+		 * if tag empty page title output is Task Type and
+		 * ticket reference number
+		 */
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_title_tag');
+		$f->attr('value', $task->titleTag);
+		if(!$task->title) $f->label = $this->_('Add Title Tag');
+		if($task->title) $f->label = $this->_('Edit Title Tag');
+		$f->description = $this->_('Optional');
+		$f->notes = $this->_('Add tag to My Task title');
+		$f->maxlength = 64;
+		$f->showCount =1;
+		$f->showIf = 'dn_task_types!=""';
+		$form->add($f);
+
+		######## SCHEDULER #######
+
+		$fieldset = $modules->get('InputfieldFieldset');
+		$fieldset->attr('id', 'dn_task_schedules');
+		$fieldset->label = $this->_('TASK SCHEDULES');
+		$fieldset->showIf = 'dn_task_types=2';
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_location');
+		$f->attr('value', $task->location);
+		$f->label = $this->_('Location');
+		$fieldset->add($f);
+
+		if ($task->startDate) $sdate = strtotime($task->startDate);
+		if ($task->startDate) $sdate = date(wire('config')->dateFormat,$sdate);
+		if ($task->endDate) $edate = strtotime($task->endDate);
+		if ($task->endDate) $edate = date(wire('config')->dateFormat,$edate);
+
+		$f = $modules->get("InputfieldDatetime");
+		$f->name = 'dn_task_date_from';
+		if($task->id) $f->attr('value', $sdate);
+		if(!$task->id) $f->attr('value', $task->startDate);
+		$f->label = $this->_('Start Date');
+		$f->dateOutputFormat = wire('config')->dateFormat;
+		$f->datepicker = 3;
+		$f->timeInputSelect = 0;
+		$f->dateInputFormat = 'd-M-Y';
+		$f->yearRange = '>0:+2';
+		$f->defaultToday = 0;
+		$f->columnWidth = 90;
+		$fieldset->add($f);
+
+		// TIME 1 - 30 min interval
+		$f = $modules->get('InputfieldSelect');
+		$f->attr('name', 'dn_task_date_from_time');
+		$f->attr('value', $task->startTime);
+		$f->label = $this->_('Start Date Time');
+
+		$start = "00:00";
+		$end = "23:30";
+		$tStart = strtotime($start);
+		$tEnd = strtotime($end);
+		$tNow = $tStart;
+
+		while($tNow <= $tEnd){
+			$f->addOption(date("H:i",$tNow),date("H:i",$tNow));
+			$tNow = strtotime('+30 minutes',$tNow);
+		}
+		$f->size = 25;
+		$f->columnWidth = 10;
+		$fieldset->add($f);
+
+		$f = $modules->get("InputfieldDatetime");
+		$f->name = 'dn_task_date_end';
+		if($task->id) $f->attr('value', $edate);
+		if(!$task->id) $f->attr('value', $task->endDate);
+		$f->label = $this->_('Due Date');
+		$f->dateOutputFormat = wire('config')->dateFormat;
+		$f->datepicker = 3;
+		$f->timeInputSelect = 0;
+		$f->dateInputFormat = 'd-M-Y';
+		$f->yearRange = '>0:+2';
+		$f->defaultToday = 0;
+		$f->columnWidth = 90;
+		$fieldset->add($f);
+
+		// TIME 2
+		$f = $modules->get('InputfieldSelect');
+		$f->attr('name', 'dn_task_date_end_time');
+		$f->attr('value', $task->endTime);
+		$f->label = $this->_('Due Date Time');
+
+		$start = "00:00";
+		$end = "23:30";
+		$tStart = strtotime($start);
+		$tEnd = strtotime($end);
+		$tNow = $tStart;
+
+		while($tNow <= $tEnd){
+			$f->addOption(date("H:i",$tNow),date("H:i",$tNow));
+			$tNow = strtotime('+30 minutes',$tNow);
+		}
+		$f->columnWidth = 10;
+		$fieldset->add($f);
+
+		$form->add($fieldset);
+
+		######## SETTINGS #######
+
+		$fieldset = $modules->get('InputfieldFieldset');
+		$fieldset->attr('id', 'dn_task_settings');
+		$fieldset->label = $this->_('Settings');
+		$fieldset->collapsed = Inputfield::collapsedYes;
+
+		// @to do: enquiry type
+		if(($this->user->hasRole('task-manager')) || ($this->user->hasRole('task-owner'))) {
+			if (!$task->id) {
+				$f = $modules->get('InputfieldRadios');
+				$f->attr('name', 'dn_task_enquiry_type');
+				$f->attr('value', $task->taskEnquiryType);
+				$f->label =  $this->_('Required Job Acceptance');
+				$f->tasks = $this->_('Broadcast the enquiry to coworker.');
+
+				$radioOptions = array (
+					1 => $this->_('Yes'),
+					2 => $this->_('No'),
+				);
+
+				$f->addOptions($radioOptions);
+				$fieldset->add($f);
+			}
+
+			if ($task->id) {
+				$f = $modules->get('InputfieldHidden');
+				$f->attr('name', 'dn_task_enquiry_type');
+				$f->attr('value', $task->taskEnquiryType);
+				$form->add($f);
+			}
+		}
+
+		if (!$task->id) {
+			$f = $modules->get('InputfieldRadios');
+			$f->attr('name', 'dn_task_priority');
+			$f->attr('value', $task->priority);
+			$f->label =  $this->_('Priority');
+			$f->tasks = $this->_('Specify task priority/urgency.');
+
+			$radioOptions = array (
+				1 => $this->_('High'),
+				2 => $this->_('Normal'),
+				3 => $this->_('Low'),
+			 );
+
+			$f->addOptions($radioOptions);
+			$fieldset->add($f);
+		}
+
+		if ($task->id) {
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_task_priority');
+			$f->attr('value', $task->priority);
+			$form->add($f);
+		}
+
+		if (($this->wire('user')->hasRole('superuser')) || $this->wire('user')->hasPermission('dashboard-tasks-settings')) {
+			$f = $modules->get('InputfieldRadios');
+			$f->attr('name', 'dn_task_status');
+			$f->attr('value', $task->status);
+			$f->label =  $this->_('Status');
+			$f->tasks = $this->_('Specify task status.');
+
+			$radioOptions = array (
+				1 => $this->_('Case Open'),
+				2 => $this->_('Case Closed'),
+				3 => $this->_('Case Pending'),
+			);
+
+			$f->addOptions($radioOptions);
+			$fieldset->add($f);
+		}
+
+
+		$textColourLabel = $this->_('Text Colour');
+		$textColourMarkup = "<div class='uk-width-1-2@s'><h4>{$textColourLabel}</h4><div id='dn_text_colour_picker' class='dn_colour_picker' data-colour='dn_task_text_colour' data-colour-type='text'></div></div>";
+
+		$backgroundColourLabel = $this->_('Background Colour');
+		$backgroundColourMarkup = "<div class='uk-width-1-2@s'><h4>{$backgroundColourLabel}</h4><div id='dn_background_colour_picker' class='dn_colour_picker' data-colour='dn_task_background_colour' data-colour-type='background'></div></div>";
+
+		$coloursMarkup = "<div data-uk-grid class='uk-grid'>{$textColourMarkup}{$backgroundColourMarkup}</div>";
+
+		$f = $modules->get('InputfieldMarkup');
+		$f->attr('value', $coloursMarkup);
+		$f->label = $this->_('Task Colours');
+		$f->tasks = $this->_('Pick text and background colours for this task. For the text, If none is picked, it will default to the current CSS text colour. For the background, the default is no background colour. Please task that if you have specified defaults colours in your global settings, those will be applied here if this is a new task. If you wish to override those, please select different colours for this task.');
+		$f->showIf = 'dn_task_priority!=1';
+		$fieldset->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_text_colour');
+
+		$f->attr('value', $task->textColour);
+		$fieldset->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_background_colour');
+		$f->attr('value', $task->backgroundColour);
+		$fieldset->add($f);
+
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_allow_replies');
+		$f->attr('value', $task->reply);
+		$f->label =  $this->_('Allow Replies');
+		$f->tasks = $this->_('Specify if others can reply to this task.');
+
+		$radioOptions = array (
+			1 => $this->_('Yes'),
+			2 => $this->_('No'),
+		);
+
+		$f->addOptions($radioOptions);
+		$fieldset->add($f);
+
+		// Lock if status closed
+		if (($this->wire('user')->hasRole('superuser')) || $this->wire('user')->hasPermission('dashboard-tasks-settings')) {
+			$f = $modules->get('InputfieldRadios');
+			$f->attr('name', 'dn_task_locked');
+			$f->attr('value', $task->locked);
+			$f->label =  $this->_('Lock');
+			$f->tasks = $this->_('Specify if this task is locked for edits. Locked tasks cannot be edited or deleted.');
+
+			$radioOptions = array (
+				1 => $this->_('Yes'),
+				2 => $this->_('No'),
+			);
+
+			$f->addOptions($radioOptions);
+			$f->showIf = 'dn_task_status=2';
+			$fieldset->add($f);
+		}
+
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_visibility_limit');
+		$f->attr('value', $task->limitVisibility);
+		$f->label =  $this->_('Visibility');
+		$f->tasks = $this->_('Specify who should be able to view this task. You can limit by roles, permissions or users. Otherwise, the task will be visible to all who can access Dashboard Tasks.');
+
+		if ($this->wire('user')->hasRole('superuser')) {
+			$radioOptions = array (
+				1 => $this->_('All')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('Users'),
+				2 => $this->settings->taskGlobalTaskLabel.' '.$this->_('By Roles'),
+				3 => $this->_('Permissions'),
+				4 => $this->_('Selected')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('Users'),
+			);
+		}
+
+		if (($this->wire('user')->hasRole('task-manager')) || ($this->wire('user')->hasRole('task-owner'))) {
+			$radioOptions = array (
+				1 => $this->_('All')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('Users'),
+				2 => $this->settings->taskGlobalTaskLabel.' '.$this->_('By Roles'),
+				4 => $this->_('Selected')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('Users'),
+			);
+		}
+
+		elseif ($this->wire('user')->hasRole('task-user')) {
+			$radioOptions = array (
+				4 => $this->_('Selected')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('Users'),
+			);
+		}
+
+		$f->addOptions($radioOptions);
+		$fieldset->add($f);
+
+		// task visibility: by role (2)
+		$f = $modules->get('InputfieldAsmSelect');
+		$f->attr('name', "dn_task_limit_role");
+		$f->attr('value', (2 == $task->limitVisibility ? $task->limitVisibilityIDs : array()));
+		$f->label = $this->_('Roles Limit');
+		$f->description = $this->_("Select roles allowed to view this task.");
+		$f->showIf = 'dn_task_visibility_limit=2';
+		$f->requiredIf = 'dn_task_visibility_limit=2';
+		$f->tasks = $warningNoticeNoVisibilityIDsSet;
+		foreach($this->wire('user')->roles as $item) {
+			if ($item->name == 'task-user') $roleDefaultID = $item->id;
+		}
+		$f->attr('value', $roleDefaultID);
+		$roles = $this->getRoles();
+		$f->addOptions($roles);
+		$fieldset->add($f);
+
+		// task visibility: by permission (3)
+		$f = $modules->get('InputfieldAsmSelect');
+		$f->attr('name', "dn_task_limit_permission");
+		$f->attr('value', (3 == $task->limitVisibility ? $task->limitVisibilityIDs : array()));
+		$f->label = $this->_('Permissions Limit');
+		$f->description = $this->_('Select permissions allowed to view this')." ".$this->settings->taskGlobalTaskLabel;
+		$f->showIf = 'dn_task_visibility_limit=3';
+		$f->requiredIf = 'dn_task_visibility_limit=3';
+		$f->tasks = $warningNoticeNoVisibilityIDsSet;
+		$permissions = $this->getPermissions();
+		$f->addOptions($permissions);
+		$fieldset->add($f);
+
+		// task visibility: by permission (4)
+		$f = $modules->get('InputfieldAsmSelect');
+		$f->attr('name', "dn_task_limit_users");
+		$f->attr('value', (4 == $task->limitVisibility ? $task->limitVisibilityIDs : array()));
+		$f->label = $this->_('Users Limit');
+		$f->description = $this->_('Select users who can view this')." ".$this->settings->taskGlobalTaskLabel;
+		$f->notes = $this->_("Do not remove yourself from the list");
+		$f->showIf = 'dn_task_visibility_limit=4';
+		$f->requiredIf = 'dn_task_visibility_limit=4';
+		$f->tasks = $warningNoticeNoVisibilityIDsSet;
+		// default value for author
+		$f->attr('value', $this->wire('user')->id);
+		$users = $this->getUsers();
+		$f->addOptions($users);
+		$fieldset->add($f);
+
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_pagination_num_str');
+		$f->attr('value', $this->pageNumParamStr);
+		$fieldset->add($f);
+
+		$form->add($fieldset);
+
+		######## EMAILS #######
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_email');
+		$f->attr('value', 1);
+		$f->label =  $this->_('Email Option');
+
+		$radioOptions = array (
+			1 => $this->_('No Email'),
+			2 => $this->_('Send Email'),
+		 );
+
+		$f->addOptions($radioOptions);
+		$f->collapsed = Inputfield::collapsedYes;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldMarkup');
+		$f->attr('id+name', 'sendemailinfo');
+		$f->attr('value', '<p style="color: gray; background: #ffffff; font-family: Arial, sans-serif; font-size: small; font-weight: bold; font-style: italic; padding: 0">Click Save and Send Email To Recipients</p>');
+		$f->showIf = 'dn_task_email=2';
+		$form->append($f);
+
+		########
+
+		// new task: submit button
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_task_edit_btn');
+		$f->value = $this->settings->taskGlobalButtonSaveLabel;
+		$f->showIf = 'dn_task_email=1';
+		//$f->showInHeader();
+
+		$f = $this->wire('modules')->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_task_edit_btn');
+		$f->value = $this->settings->taskGlobalButtonSaveLabel;
+		$f->showIf = 'dn_task_email=1';
+		//$f->showInHeader();
+
+		$dropdownButtonOptions = array(
+			// deactivate filter dropdown
+			0 => array(
+				'value' => 'exit',
+				'label' => $this->_('Save + Exit'),
+				'icon' => 'close'
+			),
+			// lock filter dropdown
+			1 => array(
+				'value' => 'new',
+				'label' => $this->_('Save + Add New'),
+				'icon' => 'plus-circle'
+			),
+			// unlock filter dropdown
+			2 => array(
+				'value' => 'view',
+				'label' => $this->_('Save + View'),
+				'icon' => 'eye'
+			),
+			// delete filter dropdown
+			3 => array(
+				'value' => 'next',
+				'label' => $this->_('Save + Next'),
+				'icon' => 'edit'
+			)
+		);
+
+		foreach($dropdownButtonOptions as $key => $value) {
+			$f->addActionValue(
+				$value['value'],
+				$value['label'],
+				$value['icon']
+			);
+		}
+
+		$form->add($f);
+
+		// new task send email: submit button
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_task_edit_send_email_btn');
+		$f->value = $this->settings->taskGlobalButtonSaveSentLabel;
+		$f->showIf = 'dn_task_email=2';
+		//$f->showInHeader();
+
+		$f = $this->wire('modules')->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_task_edit_send_email_btn');
+		$f->value = $this->settings->taskGlobalButtonSaveSentLabel;
+		$f->showIf = 'dn_task_email=2';
+		//$f->showInHeader();
+
+		$dropdownButtonOptions = array(
+			// deactivate filter dropdown
+			0 => array(
+				'value' => 'exit',
+				'label' => $this->_('Save + Exit'),
+				'icon' => 'close'
+			),
+			// lock filter dropdown
+			1 => array(
+				'value' => 'new',
+				'label' => $this->_('Save + Add New'),
+				'icon' => 'plus-circle'
+			),
+			// unlock filter dropdown
+			2 => array(
+				'value' => 'view',
+				'label' => $this->_('Save + View'),
+				'icon' => 'eye'
+			),
+			// delete filter dropdown
+			3 => array(
+				'value' => 'next',
+				'label' => $this->_('Save + Next'),
+				'icon' => 'edit'
+			)
+		);
+
+		foreach($dropdownButtonOptions as $key => $value) {
+			$f->addActionValue(
+				$value['value'],
+				$value['label'],
+				$value['icon']
+			);
+		}
+
+		$form->add($f);
+
+		// post: saving single new or edited task
+		$post = $this->wire('input')->post;
+		if($post->dn_task_edit_btn) $this->save($form);
+		if($post->dn_task_edit_send_email_btn) $this->save($form);
+
+		$out .= $form->render();
+		$out .= "</section>";
+		$out .= $this->renderTaskMenu();
+		$out .= $this->renderFooterMenu();
+		return $out;
+	}
+
+	public function ___executeHelp() {
+		$out = '';
+		$out .= $this->renderHelp();
+		$out .= $this->renderTaskMenu();
+		$out .= $this->renderFooterMenu();
+		return $out;
+	}
+	public function ___executeSettings() {
+
+		// @todo: add setting to select field to show task author name rather than user name?
+		// @todo: what about setting to show author image?
+
+		// @access-control: user has not allowed to view or edit global task settings
+		if($this->noSettings) $this->wire('session')->redirect($this->baseURL);
+
+		$out = '';
+		$out .=
+			"<div id='dn_top_wrapper' data-uk-grid>" .
+				"<div class='uk-width-expand'>" .
+					$this->renderMenu() .
+				"</div>" .
+			"</div>";
+
+		$modules = $this->wire('modules');
+
+		// create form for all tasks settings
+		$form = $modules->get('InputfieldForm');
+		$form->attr('id', 'dn_task_settings');
+		$form->action = './';
+		$form->method = 'post';
+		// Brand name
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_company_name');
+		$f->attr('value', $this->settings->companyName);
+		$f->label = $this->_('Brand Name');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldEmail');
+		$f->attr('name', 'dn_task_company_email');
+		$f->attr('value', $this->settings->companyEmail);
+		$f->label = $this->_('Admin Email');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_company_phone');
+		$f->attr('value', $this->settings->companyPhone);
+		$f->label = $this->_('Phone');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_company_address');
+		$f->attr('value', $this->settings->companyAddress);
+		$f->label = $this->_('Location');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		// Global Label Settings
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_task');
+		$f->attr('value', $this->settings->taskGlobalTaskLabel);
+		$f->label = $this->_('Global Task Label');
+		$f->notes = $this->_('default: Tasks');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_respond');
+		$f->attr('value', $this->settings->taskGlobalRespondLabel);
+		$f->label = $this->_('Global Respond Label');
+		$f->notes = $this->_('default: Messages');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_location');
+		$f->attr('value', $this->settings->taskGlobalLocationLabel);
+		$f->label = $this->_('Global Location Label');
+		$f->notes = $this->_('default: Location');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_members');
+		$f->attr('value', $this->settings->taskGlobalMembersLabel);
+		$f->label = $this->_('Global Members Label');
+		$f->notes = $this->_('default: Members');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_managers');
+		$f->attr('value', $this->settings->taskGlobalManagersLabel);
+		$f->label = $this->_('Global Task Manager Label');
+		$f->notes = $this->_('default: Task Manager');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_owners');
+		$f->attr('value', $this->settings->taskGlobalOwnersLabel);
+		$f->label = $this->_('Global Task Owner Label');
+		$f->notes = $this->_('default: Task Owner');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_coworkers');
+		$f->attr('value', $this->settings->taskGlobalCoworkersLabel);
+		$f->label = $this->_('Global Task Coworkers Label');
+		$f->notes = $this->_('default: Task Co-worker');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_submitted');
+		$f->attr('value', $this->settings->taskGlobalSubmittedLabel);
+		$f->label = $this->_('Global Task Submitted Label');
+		$f->notes = $this->_('default: Submitted');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+
+
+		// Global Button Label Settings
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_button_save');
+		$f->attr('value', $this->settings->taskGlobalButtonSaveLabel);
+		$f->label = $this->_('Global Button Save Label');
+		$f->notes = $this->_('default: Save Draft');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_button_save_sent');
+		$f->attr('value', $this->settings->taskGlobalButtonSaveSentLabel);
+		$f->label = $this->_('Global Button Save Sent Label');
+		$f->notes = $this->_('default: Save & Send Email');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_button_respond');
+		$f->attr('value', $this->settings->taskGlobalButtonRespondLabel);
+		$f->label = $this->_('Global Button Respond Label');
+		$f->notes = $this->_('default: Reply');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_global_label_button_edit_document');
+		$f->attr('value', $this->settings->taskGlobalButtonEditDocumentLabel);
+		$f->label = $this->_('Global Button Edit Document Label');
+		$f->notes = $this->_('default: Attachment');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		// Tasks Selection Label
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_notes_label');
+		$f->attr('value', $this->settings->taskNotesLabel);
+		$f->label = $this->_('Task Notes Label');
+		$f->notes = $this->_('default: Notes');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_scheduler_label');
+		$f->attr('value', $this->settings->taskSchedulerLabel);
+		$f->label = $this->_('Task Scheduler Label');
+		$f->notes = $this->_('default: Task Scheduler');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_reports_label');
+		$f->attr('value', $this->settings->taskReportsLabel);
+		$f->label = $this->_('Task Reports Label');
+		$f->notes = $this->_('default: Reports');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'dn_task_documents_label');
+		$f->attr('value', $this->settings->taskDocumentsLabel);
+		$f->label = $this->_('Task Documents Label');
+		$f->notes = $this->_('Documents');
+		$f->columnWidth = 25;
+		$form->add($f);
+
+		/* ## tasks date format ## */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_date_format');
+		$f->attr('value', $this->settings->dateFormat);
+		$f->label =  $this->_('Date Format');
+		$f->tasks = $this->_('Display format for task created dates.');
+
+		$day = $this->_('Day');
+		$month = $this->_('Month');
+		$year = $this->_('Year');
+
+		$radioOptions = array (
+			1 => "$day $month $year (30/04/2015)",
+			2 => "$year $month $day (2015/04/30)",
+			3 => "$month $day $year (04/30/2015)",
+		);
+
+		$f->addOptions($radioOptions);
+
+		$form->add($f);
+
+		/* ## tasks date month label ## */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_date_month_label');
+		$f->attr('value', $this->settings->dateMonthLabel);
+		$f->label =  $this->_('Date Month Label');
+		$f->tasks = $this->_('Specify if to show month name or number in tasks\' dates.');
+
+		$monthName = $this->_('Month Text');
+		$monthNumber = $this->_('Month Digits');
+
+		$radioOptions = array (
+			1 => "$monthNumber (30/04/2015)",
+			2 => "$monthName (30 April 2015)",
+		);
+
+		$f->addOptions($radioOptions);
+
+		$form->add($f);
+
+		/* ## tasks default text and background colours ## */
+		$textColourLabel = $this->_('Text Colour');
+		$textColourMarkup = "<div class='uk-width-1-2@s'><h4>{$textColourLabel}</h4><div id='dn_text_colour_picker' class='dn_colour_picker' data-colour='dn_task_text_colour' data-colour-type='text'></div></div>";
+
+		$backgroundColourLabel = $this->_('Background Colour');
+		$backgroundColourMarkup = "<div class='uk-width-1-2@s'><h4>{$backgroundColourLabel}</h4><div id='dn_background_colour_picker' class='dn_colour_picker' data-colour='dn_task_background_colour' data-colour-type='background'></div></div>";
+
+		$coloursMarkup = "<div data-uk-grid class='uk-grid'>{$textColourMarkup}{$backgroundColourMarkup}</div>";
+
+		$f = $modules->get('InputfieldMarkup');
+		$f->attr('value', $coloursMarkup);
+		$f->label = $this->_('Default Colours');
+		$f->tasks = $this->_('Pick default text and background colours for all new tasks. For texts, If none is picked, it will default to the current CSS text colour. For backgrounds, the default is no background colour. Please task this setting only applies when creating new tasks.');
+
+		$form->add($f);
+
+		// hidden input to store selected default task text colour. a value of 0 means no colour set.
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_text_colour');
+		// @task: we only save the values (e.g. "12,45,23,1")
+		// @task: for display and for JS configs we add the correct formatting rgba() around the values
+		$f->attr('value', $this->settings->textColour);
+
+		$form->add($f);
+
+		// hidden input to store selected default task background colour. a value of 0 means no colour set.
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_background_colour');
+		$f->attr('value', $this->settings->backgroundColour);
+
+		$form->add($f);
+
+		/* ## tasks display sort ## */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_sort');
+		$f->attr('value', $this->settings->sort);
+		$f->label =  $this->_('Display Sort');
+		$f->tasks = $this->_('How to sort display of tasks. Please task that sorting by priority works only per 1 dashboard page view as opposed to across multiple results. Hence, it may not always work as expected.');
+
+		$radioOptions = array (
+			1 => $this->_('Date'),
+			2 => $this->_('Title'),
+			// @task: effected at runtime since requires setting priority as a task page property during runtime
+			3 => $this->_('Priority'),
+		);
+
+		$f->addOptions($radioOptions);
+
+		$form->add($f);
+
+		/* ## tasks sort direction ## */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_sort_direction');
+		$f->attr('value', $this->settings->sortDir);
+		$f->label =  $this->_('Sort Direction');
+
+		$radioOptions = array (
+			1 => $this->_('Ascending'),
+			2 => $this->_('Descending'),
+		);
+
+		$f->addOptions($radioOptions);
+
+		$form->add($f);
+
+		/* ## tasks edit each others' ## */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_edit_others');
+		$f->attr('value', $this->settings->editOther);
+		$f->label =  $this->_('Users Can Edit')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('They Did Not Create?');
+		$f->tasks = $this->_("Specify if users can edit each other's tasks. Users will still be able to respond to tasks that allow responses.");
+
+		$radioOptions = array (
+			1 => $this->_('Yes'),
+			2 => $this->_('No'),
+		);
+
+		$f->addOptions($radioOptions);
+
+		$form->add($f);
+
+		/* ## tasks delete each others' ## */
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_delete_others');
+		$f->attr('value', $this->settings->deleteOther);
+		$f->label =  $this->_('Users Can Delete')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('They Did Not Create?');
+		$f->tasks = $this->_("Specify if users can delete each other's tasks.");
+
+		$radioOptions = array (
+			1 => $this->_('Yes'),
+			2 => $this->_('No'),
+		);
+
+		$f->addOptions($radioOptions);
+
+		$form->add($f);
+
+		/* ## tasks maximum display per page ## */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'dn_task_max_display');
+		$f->attr('value', $this->settings->displayMax);
+		$f->label = $this->_('Display Limit');
+		$f->description = $this->_('Maximum number of')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('to display per page.');
+
+		$form->add($f);
+
+		/* ## task maximum reply depth ## */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'dn_task_max_reply_depth');
+		$f->attr('value', $this->settings->maxReply);// 0 = no maximum
+		$f->label = $this->_('Reply Depth');
+		$f->description = $this->_('Maximum allowed nested depth for replies to tasks. A value of 0 means no maximum.');
+
+		$form->add($f);
+
+		/* ## task maximum reply depth ## */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'dn_task_truncate_max');
+		$f->attr('value', $this->settings->truncateMax);// default 150 @todo: @related: we need to fix how this relates to inline CSS for Task Titles!
+		$f->label = $this->_('Task Subject Maximum Characters');
+		$f->description = $this->_('Maximum characters for truncation for')." ".$this->settings->taskGlobalTaskLabel." ".$this->_('text preview in dashboard.');
+
+		$form->add($f);
+
+		/* ## doc images css grid ## */
+		// width
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'dn_task_width');
+		$f->attr('value', $this->settings->width);
+		$widthLabel = $this->_('Thumbnail Width');
+		$widthMarkup = "<div class='uk-width-1-2@s'><h4>{$widthLabel}</h4><div id='dn_task_width' class='dn_task_dimensions'>{$f->render()}</div></div>";
+
+		// grid gap
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'dn_task_grid_gap');
+		$f->attr('value', $this->settings->gridGap);
+		$heightLabel = $this->_('Grid Gap');
+		$heightMarkup = "<div class='uk-width-1-2@s'><h4>{$heightLabel}</h4><div id='dn_task_grid_gap' class='dn_task_dimensions'>{$f->render()}</div></div>";
+
+		$dimensionsMarkup = "<div data-uk-grid class='uk-grid'>{$widthMarkup}{$heightMarkup}</div>";
+
+		$f = $modules->get('InputfieldMarkup');
+		$f->attr('value', $dimensionsMarkup);
+		$f->label = $this->_('Thumbnail Dimensions');
+		$f->tasks = $this->_('Specify the dimensions you want images attachment to be displayed in the page view.');
+
+		$form->add($f);
+
+		########
+
+		// save button
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_tasks_settings_btn');
+		$f->showInHeader();
+		$f->attr('value', $this->_('Save'));
+
+		$form->add($f);
+
+		// post: saving all task settings
+		$post = $this->wire('input')->post;
+		if($post->dn_tasks_settings_btn) $this->save($form);
+
+		$out .= $form->render();
+
+		return $out;
+	}
+
+	/* ######################### - RENDER/MARKUP - ######################### */
+
+	/**
+	 * Render navigation for module pages use.
+	 *
+	 * @access private
+	 * @param string $actions Rendered dropdown (default is empty string if not applicable)
+	 * @return string $out Markup of rendered navigation.
+	 *
+	 */
+	private function renderTaskMenu() {
+
+		$out = '';
+
+		$parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+		$page = $this->wire('pages')->get("parent=$parent, template=admin, include=all, name=dashboard-docs");
+
+		if($page->id && $page->id > 0) $menuDoc = "<li><a href='".$this->wire('config')->urls->admin."dashboard-docs/'><i class='fa fa-lg fa-file'></i></a></li>";
+		if(!$page->id) $menuDoc = "";
+
+		$out .=
+			"<section id='tasks-nav' class='tasks-nav'>" .
+				"<ul id='tasks-nav-menu' class='tasks-nav-menu'>" .
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-tasks/edit/'><i class='fa fa-lg fa-plus-circle'></i></a></li>" .
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-tasks/'><i class='fa fa-lg fa-tasks'></i></a></li>" .
+					$menuDoc.
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-tasks/help/'><i class='fa fa-lg fa-info-circle'></i></a></li>" .
+				"</ul>" .
+			"</section>";
+
+		return $out;
+	}
+
+	private function renderMenu($actions = "") {
+		$parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+		$page = $this->wire('pages')->get("parent=$parent, template=admin, include=all, name=dashboard-docs");
+
+		if ($this->wire('user')->hasRole('task-manager')) {
+			$settingsURL = $this->baseURL . "/settings/";
+		}
+		else {
+			$settingsURL = $this->baseURL . "/help/";
+		}
+
+		$newTaskURL = $this->wire('config')->urls->admin."dashboard-tasks/edit/";
+
+		if($page->id && $page->id > 0) $menuDocURL = $this->wire('config')->urls->admin."dashboard-docs/";
+
+		$newTasksText =	"<i class='fa fa-lg fa-plus-circle'></i>";
+		$allTasksText = "<i class='fa fa-lg fa-tasks'></i>";
+		$menuDoc =  "<i class='fa fa-lg fa-file'></i>";
+		if ($this->wire('user')->hasRole('task-manager')) {
+			$allTaskSettingsText = "<i class='fa fa-lg fa-cog'></i>";
+		}
+		else {
+			$allTaskSettingsText = "<i class='fa fa-lg fa-info-circle'></i>";
+		}
+		$actionText = "<i class='fa fa-lg fa-cogs'></i>";
+
+		$menuItemsArray = array(
+			'new' => array( 'href' => $newTaskURL, 'link_text' => $newTasksText),
+			'all' => array( 'href' => $this->baseURL, 'link_text' => $allTasksText),
+			'docs' => array( 'href' => $menuDocURL, 'link_text' => $menuDoc),
+			'settings' =>  array( 'href' => $settingsURL, 'link_text' => $allTaskSettingsText),
+		);
+
+		$actionsLabel = $actions === "" ? $actions : "<label id='dn_action_select_label' class='uk-form-label' for='dn_action_select' data-uk-tooltip='title: {$this->_("Tick some boxes below, pick an action, then click Apply.")}; pos: left'>" . $actionText . "</label>";
+		$menuItems = '';
+		$on = " class='dn_on uk-active'";
+		$out = '';
+		foreach ($menuItemsArray as $key => $value) {
+			$href = $value['href'];
+			$linkText = $value['link_text'];
+			$class = '';
+			if(!$this->urlSeg1 && $key != 'settings') $class = $on;
+			elseif($this->urlSeg1 && $this->urlSeg1 == $key) $class = $on;
+
+			$menuItems .= "<li><a href='{$href}' {$class}><span>{$linkText}</span></a></li>";
+		}
+		if ($this->wire('user')->hasRole('task-user')) {
+			$out =
+				"<nav id='task-menu' class='task-menu'>" .
+					"<ul class='task-action'>" .
+						$menuItems.
+						"<li>" .$actionsLabel. "</li>" .
+						"<li>" .$actions. "</li>" .
+					"</ul>" .
+				"</nav>";
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Render markup for link to create new task.
+	 *
+	 * @access private
+	 * @return string $out Markup of link to create new task.
+	 *
+	 */
+	private function renderCreateTask() {
+		$createTaskText = $this->_('New Task');
+		$createTaskURL = $this->baseURL . "/edit/";
+		$out = "<a href='{$createTaskURL}' class='ui-helper-clearfix dn_create_task'><i class='fa fa-fw fa-plus-circle'></i>{$createTaskText}</a>";
+		return $out;
+	}
+
+	/**
+	 * Render tasks for display on landing page.
+	 *
+	 * @access private
+	 * @param PageArray $tasks All the tasks to be rendered.
+	 * @return string $out Markup of rendered tasks for display.
+	 *
+	 */
+	private function renderTasks($tasks) {
+		$out = '';
+
+		// $user = $this->wire('user');
+		$urlParamPageNumStr = $this->wire('input')->pageNumStr() ? "?page=" . $this->wire('input')->pageNumStr() : "";
+		$viewIcon = "<i class='fa fa-lg fa-eye'></i>";
+
+		// colors for status in css
+		$priorityClasses = array(1=>'priority-high',2=>'priority-normal',3=>'priority-low');
+		$statusClasses = array(1=>'dn_open_status',2=>'dn_closed_status',3=>'dn_pending_status');
+
+		$out .= "<ul class='dn_tasks_grid'>";
+
+		// loop through tasks, building markup
+		foreach ($tasks as $task) {
+
+			$viewURL = $this->baseURL . "/view/{$task->id}/{$urlParamPageNumStr}";
+			$viewMarkup = "<a href='{$viewURL}' class='dn_task_view gridTask__edit'>" . $viewIcon. "</a>";
+
+			## editing rights and markup
+			// users not allowed to edit each other's tasks and this user is not the task author
+			$showEditMarkup = $this->checkEdit($task);
+
+			if($showEditMarkup) {
+				$viewEditDividerMarkup = "<span class='dn_task_view_edit_divider'>&nbsp;|&nbsp;</span>";
+				if($task->is(Page::statusLocked)){
+					$editURL = '#';
+					$editClass = 'gridTask__locked';
+					$editIcon = "<i class='fa fa-lock'></i>";
+					$editMarkup = "<a href='{$editURL}' class='{$editClass}'>" . $editIcon . "</a>";
+				}
+				// edit markup: task unlocked and can be edited (@task: including not global restriction on editing each other's tasks)
+				else {
+					$editURL = $this->baseURL . "/edit/{$task->id}/{$urlParamPageNumStr}";
+					$editClass = 'gridTask__edit';
+					$editIcon = "<i class='fa fa-lg fa-pencil-square-o'></i>";
+					$editMarkup = "<a href='{$editURL}' class='{$editClass}'>" . $editIcon . "</a>";
+				}
+			}
+			else {
+				$viewEditDividerMarkup = "";
+				$editMarkup = "";
+			}
+
+			##################
+			// @task: textColour NOT applied to div.dn_task
+			$textColour = $task->textColour ? " style='color:rgba({$task->textColour});'" : '';
+			$backgroundColour = $task->backgroundColour ? "background-color:rgba({$task->backgroundColour});" : '';
+
+			// task width + height + background colour inline CSS styles. applied to div.dn_task
+			//$width = "width:{$this->settings->width}px;";
+			//$height = "height:{$this->settings->height}px;";
+
+			$taskWrapperStyles = " style='{$backgroundColour}'";
+
+			// grab the comment subject and clean it
+			$subject = htmlentities($task->subject, ENT_QUOTES, "UTF-8");
+			$subject = str_replace("\n\n", "<p></p>", $subject);
+			$subject = str_replace("\n", "<br />", $subject);
+
+			$subject = $this->wire('sanitizer')->truncate($subject, [
+				'type' => 'punctuation',
+				'maxLength' => $this->settings->truncateMax,
+				'visible' => true,
+				'keepFormatTags' => true,
+				'more' => "..."
+			  ]);
+
+			/**
+			 * if start date is empty created date will be used
+			 */
+
+			$date = date('d M Y', $task->created);
+
+			if(!$task->startDate) $sdate = $date;
+			if($task->startDate) $sdate = $task->startDate;
+			if(!$task->endDate) $edate = "";
+			if($task->endDate) $edate = $task->endDate;
+			if(!$task->startTime) $stime = "";
+			if($task->startTime) $stime = $task->startTime;
+			if(!$task->endTime) $etime = "";
+			if($task->endTime) $etime = $task->endTime;
+
+			$author = $task->createdUser->name;
+
+			// if task priority not set, it means task is "normal" so priority "2" set at runtime
+			if(!$task->priority) $task->priority = 2;
+			$taskPriority = str_repeat("&#42;",$task->priority);
+
+			if(!$task->status) $task->status = 1;
+			$taskStatus = str_repeat("&#42;",$task->status);
+
+			$commentsCount = "<span class='fa fa-comments-o'><span class='dn_task_comments_count'>{$task->dashboard_task->count()}</span></span>";
+			$priorityClass = " " . $priorityClasses[$task->priority];
+			if ($task->priority > 1) $tPriority = "";
+			if ($task->priority == 1) $tPriority = "Priority <span class='uk-badge{$priorityClass} txt-bold'>{$task->priority}</span>";
+
+			$statusClass = " " . $statusClasses[$task->status];
+
+			$metaDivider = "&#47;";
+			$meta = "{$date} {$metaDivider} {$author} {$metaDivider} <span class='dn_task_priority_meta'>{$taskPriority} {$taskStatus}</span>";
+
+			/*
+			$taskMembersLabel = $this->_('All')." ".$this->settings->taskGlobalMembersLabel;
+			$taskMember = "";
+			$taskMembers = "";
+
+			if ($task->limitVisibility == 4) {
+				foreach($task->limitVisibilityIDs as $item) {
+					foreach($this->wire('users') as $user) {
+						if (($item == $user->id) && ($author != $user->name)) {
+							$taskMember .= $user->name .", ";
+						}
+					}
+				}
+				$taskMembers = $taskMember." ".$author;
+				$taskMembersLabel = $this->_('Limited')." ".$this->settings->taskGlobalMembersLabel;
+			}
+			*/
+
+			if ($edate) $taskDate = $edate." ".$etime;
+			if (!$edate) $taskDate = $sdate." ".$stime;
+
+			##################
+			$out .=
+				"<li id='task-{$task->id}' style='border:1px solid rgba(". $this->settings->backgroundColour .");' class='gridTask ui-widget dn_task' data-task-value='{$task->id}' {$textColour}>" .
+					"<div class='dn_task gridTask__overflow task-menu' {$taskWrapperStyles}>" .
+						"<ul class='task-text' {$textColour}>" .
+							"<li class='txt-right'><small>{$author} {$commentsCount}</small><li>" .
+							"<li class='task-content-menu txt-border'>{$taskDate}<li>" .
+							"<li><strong>{$subject}</strong><li>" .
+							"<li>{$tPriority}<li>" .
+						"</ul>" .
+					"</div>" .
+					"<div class='gridTask__hover'>" .
+						"<div class='gridTask__inner'>" .
+							"<label class='gridTask__icon' for='' data-value='{$task->id}'>" .
+								"<input class='dn_task_check gridTask__selectbox' id='task-{$task->id}' name='dn_selected_tasks[]' type='checkbox' value='{$task->id}'>" .
+								"<span class='dn_select fa fa-check-square-o'></span>" .
+							"</label>" .
+							"<span class='dn_task_view_edit' style='{$backgroundColour}'>" .
+								$viewMarkup ."". $viewEditDividerMarkup ."". $editMarkup .
+							"</span>" .
+						"</div>" .
+					"</div>" .
+				"</li>";
+		}
+
+		$out .= "</ul>";
+		return $out;
+	}
+
+	/**
+	 * Recursively render list of threaded replies/comments to tasks.
+
+	 * @param CommentArray $comments Array of comments.
+	 * @param integer $depth How deep to nest..
+	 * @param integer $parent At which point of the hierarchy to start rendering from.
+	 * @param integer $first Helper parameter to know if on first list item.
+	 * @return string $out Markup of threaded comments.
+	 *
+	 */
+	private function renderThreadedReplies($comments, $depth = 1, $parent = 0, $first = 0) {
+
+		$out = '';
+		$depth -= 1;
+		$replyText = $depth == 1 ? '' : $this->_('Reply');
+		$hasChild = false;
+
+		foreach ($comments as $comment) {
+
+			// grab the comment text and clean it
+			$commentText = htmlentities($comment->text, ENT_QUOTES, "UTF-8");
+			$commentText = str_replace("\n\n", "</p><p>", $commentText);
+			$commentText = str_replace("\n", "<br />", $commentText);
+
+			//$commentDate = date( $this->dateFormat, $comment->created);
+			$commentDate = date('d-m-Y', $comment->created);
+
+			if ($comment->status == 1) {
+				## - build nested comments - ##
+
+				// @todo: sort out \n and \t? not really important here though!
+
+				// if this comment item is a parent; create the inner-items/child-comment-items
+				if ($comment->parent_id == $parent && $depth > 0) {
+					// if this is the first child
+					if ($hasChild === false) {
+						$hasChild = true;// This is a parent
+						if ($first == 0){
+							$out .= "<ul id='dn_threaded_comments_main' class='uk-comment-list' style='color:rgba(".$this->settings->textColour.");background-color:rgba(".$this->settings->backgroundColour."); padding:10px; border-radius: 10px;'>";
+							$first = 1;
+
+						}
+						else $out .= "<ul class='uk-comment-list'>";
+					}
+
+					$out .=
+						"<li>" .
+							"<article class='uk-comment dn_response_wrapper'>" .
+								"<header class='uk-comment-header'>" .
+									"<div style='font-size:small;color:rgba(".$this->settings->textColour.");border-bottom: 1px solid #c9d9d5;'>{$commentDate} <strong>{$comment->cite}</strong><br /><a href='mailto:{$comment->email}'>{$comment->email}</a></div>" .
+								"</header>" .
+								"<div class='uk-comment-body uk-text-small'>{$commentText}</div>" .
+								"<div class='dn_task_comment_footer uk-margin-small-top uk-text-small'>" .
+									"<p class='dn_task_comment_action uk-margin-small'>" .
+										"<a class='dn_task_comment_action_reply' data-comment-id='{$comment->id}' href='#'>" .
+											$replyText .
+										"</a>" .
+									"</p>" .
+								"</div>" .// close div.dn_task_comment_footer
+							"</article>";
+					######################### generate child-comment items [recursion] #########################
+					$out .= $this->renderThreadedReplies($comments, $depth, $comment->id, $first);
+					// close the <li>
+					$out .= "</li>";
+					//monchu send email here
+
+				}// end if parent
+			}
+		}// end foreach $comments
+
+		if ($hasChild === true) $out .= "</ul>";
+
+		return $out;
+	}
+
+	/**
+	 * Render markup of a task or comment's reply form.
+	 *
+	 * This is used for both when replying to the task itself or when replying to other comments (i.e. comment with a parent ID).
+	 * When replying to other replies, this form is cloned on the fly using JavaScript.
+	 *
+	 * @access private
+	 * @return string $out Markup of task reply form.
+	 *
+	 */
+	private function renderReplyMarkup() {
+		$task = $this->task;
+		$out = '';
+
+		// if responses NOT allowed, return
+		if(2 == $task->reply) return $out;
+
+		if(!count($task->dashboard_task)) {
+			$taskResponses = "";
+		}
+		else {
+			$depth = $this->settings->maxReply ? $this->settings->maxReply + 1 : INF;
+			$taskResponses = $this->renderThreadedReplies($this->task->dashboard_task,$depth);
+		}
+
+		$modules = $this->wire('modules');
+
+		// create form for all tasks settings
+		$form = $modules->get('InputfieldForm');
+		$form->attr('id', 'dn_task_response_form');
+		$form->action = './';
+		$form->method = 'post';
+
+		######## JOB ACCEPTANCE #######
+		if(($task->taskEnquiryType == 1) && ($task->taskJobAcceptance != 1)) {
+			if ($this->wire('user')->hasRole('task-user')) {
+				$f = $modules->get('InputfieldRadios');
+				$f->attr('name', 'dn_task_job_acceptance');
+				$f->attr('value', 2);
+				$f->label =  $this->_('Job Acceptance');
+
+				$radioOptions = array (
+					1 => $this->_('Accept this Task'),
+					2 => $this->_('Not available for this Task'),
+				 );
+
+				$f->addOptions($radioOptions);
+				//$f->collapsed = Inputfield::collapsedYes;
+				$form->add($f);
+			}
+		}
+
+		######## EMAILS #######
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', 'dn_task_email');
+		$f->attr('value', 2);
+		$f->label =  $this->_('Email Option');
+
+		$radioOptions = array (
+			1 => $this->_('No Email'),
+			2 => $this->_('Send Email'),
+		 );
+
+		$f->addOptions($radioOptions);
+		$f->collapsed = Inputfield::collapsedYes;
+		$form->add($f);
+
+		// inputfield markup to hold existing responses
+		$f = $modules->get('InputfieldMarkup');
+
+		$f->attr('value', $taskResponses);
+
+		$form->add($f);
+
+		// new task: inputfield textarea
+		$f = $modules->get('InputfieldTextarea');
+		$f->attr('name', 'dn_task_response_text');
+		$f->attr('value', "");
+		$f->label = $this->settings->taskGlobalRespondLabel;
+		$f->rows = 5;
+
+		$form->add($f);
+
+		/*
+			- inputfield markup to hold template reply form for cloning in JS
+			- it contains a textarea and a hidden input for replying to exising comments/responses only
+			- the textarea is for the text and the hidden input for the ID of the parent comment
+			- the parent comment is the one being responded to (as opposed to a response to the task itself)
+			- this form is hidden using CSS
+		*/
+
+		## hidden template for JS cloning ##
+
+		// hidden textarea to clone in JS to use to store text of the response to an existing comment
+		// its value will be changed in JS after cloning.
+		// its name will also be changed to handle multiple inputs ([])
+		$t = $modules->get('InputfieldTextarea');
+		$t->attr('id+name', 'dn_response_text_template');
+		$t->attr('value', "");
+		$t->rows = 5;
+		$responseToCommentTemplate = $t->render();
+
+		// hidden input to clone in JS to use to store parent ID of the response to an existing comment
+		// its value will be changed in JS after cloning. It cannot be 0!
+		// its name will also be changed to handle multiple inputs ([])
+		$t = $modules->get('InputfieldHidden');
+		$t->attr('id+name', 'dn_response_parent_id_template');
+		$t->attr('value', 0);
+		$responseToCommentTemplate .= $t->render();
+
+		$t = $modules->get('InputfieldSubmit');
+		$t->attr('id', 'dn_response_reply_btn_template');
+		$t->attr('name', 'dn_task_reply_btn');
+		$t->attr('value', $this->_('Reply'));
+		$responseToCommentTemplate .= $t->render();
+
+		$responseToCommentTemplate = "<div id='dn_task_responses_template'>" . $responseToCommentTemplate ."</div>";
+
+		$f = $modules->get('InputfieldMarkup');
+		$f->attr('value', $responseToCommentTemplate);
+		$f->class = "dn_hide";
+
+		$form->add($f);
+
+		## inputs relating to task ##
+
+		// hidden input to store task page id
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_page_id');
+		// @task: we only save the values (e.g. "12,45,23,1")
+		// @task: for display and for JS configs we add the correct formatting rgba() around the values
+		$f->attr('value', $this->task->id);
+		$form->add($f);
+
+		// hidden input to store parent id of the comment that is a response to the task itself. Its value will always be 0.
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_parent_id');
+		$f->attr('value', 0);
+		$form->add($f);
+
+		// hidden input to store param string for pagination. Helps to properly redirect to viewing the task after submitting responses
+		$f = $modules->get('InputfieldHidden');
+		$f->attr('id+name', 'dn_task_pagination_num_str');
+		$f->attr('value', $this->pageNumParamStr);
+		$form->add($f);
+
+		########
+
+		// save button
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('id+name', 'dn_task_reply_btn');
+		$f->attr('value', $this->_('Reply'));
+
+		$form->add($f);
+
+		// post: posting a response/comment to a task
+		$post = $this->wire('input')->post;
+		if($post->dn_task_reply_btn) $this->save($form);
+
+		$out = "<section id='dn_task_responses'>" . $form->render() ."</section>";
+
+		return $out;
+	}
+
+	/**
+	 * Help for new user
+	 */
+	public function renderHelp() {
+		$out = '';
+		$out .= "<section style='border-top:3px solid rgba(".$this->settings->backgroundColour."); border-bottom:10px solid rgba(".$this->settings->backgroundColour.");'>";
+		if($this->wire('user')->hasRole('task-manager') && $this->wire('user')->hasRole('task-user')) $introFile = wireRenderFile(__DIR__ .  '/kbase/intro-task-manager.php');
+		if($this->wire('user')->hasRole('task-owner') && $this->wire('user')->hasRole('task-user')) $introFile = wireRenderFile(__DIR__ .  '/kbase/intro-task-owner.php');
+		if(!$this->wire('user')->hasRole('task-manager') && !$this->wire('user')->hasRole('task-owner')) $introFile = wireRenderFile(__DIR__ .  '/kbase/intro-task-user.php');
+
+		$form = $this->modules->get('InputfieldForm');
+		$form->action = './';
+		$form->method = 'post';
+
+		$f = $this->modules->get('InputfieldMarkup');
+		$f->id = 'tasksinfo';
+		$f->label = 'Welcome '. $this->wire('user')->name;
+		$f->markupText = $introFile;
+		$form->add($f);
+
+		$out .= $form->render();
+		$out .= "</section>";
+		return $out;
+	}
+
+	/**
+	 * Render hidden markup to store last selected task ID.
+	 *
+	 * Helps with the JS shift-selecting feature.
+	 * Using shift, users can select all tasks between a range.
+	 *
+	 * @access private
+	 * @return string $out. Markup for shift-selection.
+	 *
+	 */
+	private function renderShiftSelectMarkup() {
+		$out = '<div id="dn_shift_select_wrapper" class="dn_hide"><input id="dn_previous_selected_task" type="hidden" value="0"></div>';
+		return $out;
+	}
+
+	private function renderFooterMenu() {
+		$out = '';
+		$out .= "<section id='task-content-footer' class='task-content-footer'>MD Collabs V0.01<br /><a href='https://maxdev.com.au'>MaxDev.com.au</a></section>";
+		return $out;
+	}
+	/* ######################### - CRUD ACTIONS - ######################### */
+	/**
+	 * Processes ProcessDashboardTasks form inputs (CRUD).
+	 *
+	 * CRUD - Processes all the form input sent from execute(), executeEdit() and executeView() (response forms).
+	 *
+	 * @access private
+	 * @param object $form Sent form values.
+	 *
+	 */
+	private function save($form) {
+		$post = $this->wire('input')->post;
+
+		// process form
+		$form->processInput($post);
+
+		// save new task or edit existing task
+		if ($post->dn_task_edit_btn) $this->saveTask($post);
+		if ($post->dn_task_edit_send_email_btn) $this->saveTask($post);
+		if ($post->dn_task_edit_send_btn) $this->saveTask($post);
+
+
+		// tasks bulk actions: lock/unlock, trash/delete, change priority, allow replies
+		elseif($post->dn_actions_btn) $this->saveBulkActions($post);
+		// save: task replies
+		elseif($post->dn_task_reply_btn) $this->saveTaskReply($post);
+		// save: task settings
+		elseif ($post->dn_tasks_settings_btn) $this->saveSettings($post);
+	}
+
+	/**
+	 * Save new or edit existing tasks.
+	 *
+	 * @access private
+	 * @param array $post Input Post with new or existing task to save.
+	 *
+	 */
+	private function saveTask($post) {
+		$btnOpenTask = '';
+		$copyRight = $this->_('© ');
+		$schedules = '';
+
+		$pages = $this->wire('pages');
+		$sanitizer = $this->wire('sanitizer');
+		$session = $this->wire('session');
+		$user = $this->wire('user');
+
+		$taskPageID = (int) $post->dn_task_page_id;
+		$taskType = (int) $post->dn_task_types;
+
+		if($taskType == 1) $titleType = $this->settings->taskNotesLabel;
+		if($taskType == 2) $titleType = $this->settings->taskSchedulerLabel;
+		if($taskType == 3) $titleType = $this->settings->taskReportsLabel;
+		if($taskType == "") $titleType = "";
+
+		$taskTitleTag = $sanitizer->textarea($post->dn_task_title_tag);
+
+		/**
+		 * Title Tag
+		 * page title output Task Type and Title Tag
+		 * if tag empty page title output is Task Type and
+		 * ticket reference number
+		 * Title Tag for Task List description
+		 */
+
+		if($taskTitleTag != "") $taskTitle = $titleType.": ".$taskTitleTag;
+		if($taskTitleTag == "") $taskTitle = $titleType." Ref: TRN-".$taskType."-".date("ymd")."-".$user->id;
+
+		/**
+		 * Ticket Reference Number TRN
+		 * for new ticket add date now for unique id
+		 * and task creator id
+		 * trn will be used for doc ref page name
+		 */
+
+		//$taskText = $sanitizer->textarea($post->dn_task_text);
+		$taskText = $post->dn_task_text;
+		$taskSubject = $sanitizer->text($post->dn_task_subject);
+		$taskLocation = $sanitizer->text($post->dn_task_location);
+		$dateStart = $post->dn_task_date_from;
+		$dateEnd = $post->dn_task_date_end;
+
+		$timeStart = $post->dn_task_date_from_time;
+		$timeEnd = $post->dn_task_date_end_time;
+
+		$taskAfterSave = $sanitizer->fieldName($post->_action_value);
+		$lockStatus = (int) $post->dn_task_locked;
+		$nameClash = false;
+
+		// hidden input that holds the pagination str in order to preserve for redirection and hence 'back to all links' to page where this task was at in the dashboard
+		$paginationNumberStr = $sanitizer->pageName($post->dn_task_pagination_num_str);
+		$urlParamPageNumStr = $paginationNumberStr ? "?page=" . $paginationNumberStr : "";
+
+		// redirect back if no title or no text
+		if (!$taskTitle || !$taskText)  {
+			// @todo: error here, redirect!? ProcessWire will throw error anyway?
+			$this->error($this->_('A title and text are required.'));
+			$session->redirect($this->baseURL . "/edit/{$taskPageID}/{$urlParamPageNumStr}");
+		}
+
+		$taskOwnerID = $sanitizer->text($post->dn_task_owner_id);
+		$taskOwnerName = $sanitizer->text($post->dn_task_owner_name);
+		$taskOwnerEmail = $sanitizer->text($post->dn_task_owner_email);
+
+		$parent = $this->wire('page')->child('include=all');
+
+		// settings
+		$settingsArray = array();
+		$settingsArray['titleTag'] = $taskTitleTag;
+		$settingsArray['taskType'] = $taskType;
+		$settingsArray['subject'] = $taskSubject;
+		$settingsArray['text'] = $taskText;
+
+		// store Task Ref. Number and submitter email
+		$settingsArray['submitterID'] = $user->id;
+		$settingsArray['submitterName'] = $user->name;
+		$settingsArray['submitterEmail'] = $user->email;
+
+		$settingsArray['taskOwnerID'] = $taskOwnerID;
+		$settingsArray['taskOwnerName'] = $taskOwnerName;
+		$settingsArray['taskOwnerEmail'] = $taskOwnerEmail;
+
+		// for SMS
+		//$settingsArray['submitterMobile'] = $user->mobile;
+
+		$taskEnquiryType = (int) $post->dn_task_enquiry_type;
+		$settingsArray['taskEnquiryType'] = $taskEnquiryType;
+
+		// only save task priority if either high (1) or low (3). Otherwise, we'll default to normal (1) at runtime
+		$taskPriority = (int) $post->dn_task_priority;
+		$settingsArray['priority'] = $taskPriority;
+		$settingsArray['location'] = $taskLocation;
+		$settingsArray['startDate'] = $dateStart;
+		$settingsArray['endDate'] = $dateEnd;
+		$settingsArray['startTime'] = $timeStart;
+		$settingsArray['endTime'] = $timeEnd;
+		$taskStatus = (int) $post->dn_task_status;
+		$settingsArray['status'] = $taskStatus;
+
+		// Priority 1 colours for Task Scheduler only
+		if (($taskPriority == 1) && ($taskType == 2)) {
+			$settingsArray['textColour'] = "rgba('255,255,255,1')";
+			$settingsArray['backgroundColour'] = "rgba('250,20,0,1')";
+		}
+		else {
+			$settingsArray['textColour'] = str_replace(array("rgba(", ")"), "", $post->dn_task_text_colour);
+			$settingsArray['backgroundColour'] = str_replace(array("rgba(", ")"), "", $post->dn_task_background_colour);
+		}
+
+		// only save task reply setting if no replies allowed (2) Otherwise, we'll default to replies allowedl (1) at runtime
+		$taskReply = (int) $post->dn_task_allow_replies;
+		if(2 == $taskReply) $settingsArray['reply'] = $taskReply;
+
+		// visibility access
+		$taskLimit = (int) $post->dn_task_visibility_limit;
+		$limitIDs = array();
+		// only save limitVisibility if there is access control. Otherwise, we'll use default (1) (all can view all tasks) at runtime
+		if($taskLimit > 1) {
+			$settingsArray['limitVisibility'] = $taskLimit;
+			// limit by role
+			if(2 == $taskLimit) $limitIDs = $sanitizer->intArray($post->dn_task_limit_role);
+			// limit by permission
+			elseif(3 == $taskLimit) $limitIDs = $sanitizer->intArray($post->dn_task_limit_permission);
+			// limit by user
+			elseif(4 == $taskLimit) $limitIDs = $sanitizer->intArray($post->dn_task_limit_users);
+			$settingsArray['limitVisibilityIDs'] = $limitIDs;
+
+			if($taskLimit == 4) {
+				/**
+				 * For selected Users
+				 * we store their names and emails
+				 */
+				$recipientEmails = '';
+				$recipientNames = '';
+				foreach($this->wire('users') as $u) {
+					if(!$u->hasRole('task-user')) continue;
+					if($u->name == 'guest') continue;
+					if($u->id == '41') continue;
+
+					if ($u->email != $this->user->email) {
+						foreach($limitIDs as $uid) {
+							if ($uid == $u->id) {
+								$recipientEmails .= $u->email .", ";
+								$recipientNames .= $u->name .", ";
+							}
+						}
+					}
+				}
+				$settingsArray['recipientNames'] = trim($recipientNames, ", ");
+				$settingsArray['recipientEmails'] = trim($recipientEmails, ", ");
+
+				// get recipientMobiles
+				/**
+				 * For SMS API
+				 * we store their mobiles
+				 */
+
+				/*
+				$recipientEmails = '';
+				foreach($this->wire('users') as $u) {
+					if(!$u->hasRole('task-user')) continue;
+					if($u->name == 'guest') continue;
+					if($u->id == '41') continue;
+
+					if ($u->email != $this->user->email) {
+						foreach($limitIDs as $uid) {
+							if ($uid == $u->id) {
+								$recipientEmails .= $u->mobile .",";
+							}
+						}
+					}
+				}
+				$settingsArray['recipientMobiles'] = trim($recipientMobiles, ", ");
+				*/
+			}
+		}
+
+		/**
+		 * Generate a unique ID, a ticket number in page name
+		 * Ticket Reference Number TRN
+		 * Task Type - Submitted Date - Submitted User ID
+		 */
+
+		$submittedDate = date("ymd-His");
+		$taskName = "trn-".$taskType."-".$submittedDate."-".$user->id;
+
+		if(!$taskPageID ) {
+			$page = new Page();
+			$page->template = "dashboard-task";
+			$page->parent = $parent;
+			$page->name = $taskName;
+			// sanitize and convert to a URL friendly page name
+			if($parent->child("name={$taskName}, include=all")->id) $nameClash = true;
+		}
+
+		// existing task
+		else {
+			$page = $pages->get($taskPageID);
+			// no such page found
+			if(!$page) {
+				$this->error($this->_('Task not found.'));
+				// redirect with error
+				$session->redirect($this->baseURL . "/edit/");
+			}
+
+			if($page->title != $taskTitle) {
+				if($parent->child("name={$taskName}, include=all")->id) $nameClash = true;
+			}
+		}
+
+		// name clash (task with specified name already exists), redirect
+		// just precaution, we use unique id to avoid name clash
+		if($nameClash) {
+			$this->error($this->_('A task with that name already exists! Choose a different name.'));
+			// redirect
+			$session->redirect($this->baseURL . "/edit/{$page->id}/{$urlParamPageNumStr}");
+		}
+
+		// @to do: the task creator still able to edit locked page
+
+		// if NOT NEW Task and page locked ONLY save if removing lock
+		if($taskPageID && $page->is(Page::statusLocked)) {
+			// if user is unlocking, then unlock, save and redirect
+			if(2 == $lockStatus) {
+				//  user is trying to unlock a locked task page. remove lock and redirect. no other saves!
+				$page->removeStatus(Page::statusLocked);
+				$page->save();
+				$this->message($this->_('Task unlocked for edits.'));
+				// redirect to edit after save
+				$session->redirect($this->baseURL . "/edit/{$page->id}/{$urlParamPageNumStr}");
+			}
+			// else, error, page locked, user needs to unlock task page first
+			else {
+				$this->error($this->_('This task is locked for edits. Change its locked status first and save before continuing.'));
+				// redirect to edit after save
+				$session->redirect($this->baseURL . "/edit/{$page->id}/{$urlParamPageNumStr}");
+			}
+		}
+
+		$date = date('d M Y', $page->created);
+
+		if(!$page->startDate) $sdate = $date;
+		if($page->startDate) $sdate = $this->_('Start Date on')." ". $page->startDate;
+		if(!$page->endDate) $edate = "";
+		if($page->endDate) $edate = $this->_('Due Date on')." ". $page->endDate;
+		if(!$page->startTime) $stime = "";
+		if($page->startTime) $stime = $this->_('at')." ". $page->startTime;
+		if(!$page->endTime) $etime = "";
+		if($page->endTime) $etime = $this->_('at')." ". $page->endTime;
+
+		$schedules = "<span>".$sdate." ".$stime." - ".$edate." ".$etime."</span>";
+
+		$settingsArray['taskTrn'] = $page->name;
+
+		if($taskTitleTag != "") $page->title = $titleType." ".$taskTitleTag;
+		if($taskTitleTag == "") $page->title = $titleType." Ref: TRN-".$taskType."-".date('ymd', $page->created)."-".$user->id;
+
+		// if task page is getting locked as well
+		if(1 == $lockStatus) $page->addStatus(Page::statusLocked);
+
+		$settingsJSON = count($settingsArray) ? wireEncodeJSON($settingsArray) : '';// @task: wont save empties
+		$page->dashboard_tasks_settings = $settingsJSON;
+		$page->save();
+
+		/**
+		 * Send Email to Recipients if selected
+		 *
+		 * $emailOption == 2
+		 *
+		 *
+		 */
+
+		$tPriority = $this->_('Normal');
+		$tStatus = $this->_('Open');
+
+		if($taskType == 1) $tTask = $this->settings->taskNotesLabel;
+		if($taskType == 2) $tTask = $this->settings->taskSchedulerLabel;
+		if($taskType == 3) $tTask = $this->settings->taskReportsLabel;
+
+		if($taskPriority == 1) $tPriority = $this->_('High');
+		if($taskPriority == 2) $tPriority = $this->_($tPriority);
+		if($taskPriority == 3) $tPriority = $this->_('Low');
+		if($taskPriority == "") $tPriority = $this->_($tPriority);
+
+		if($taskStatus == 1) $tStatus = $this->_($tStatus);
+		if($taskStatus == 2) $tStatus = $this->_('Pending');
+		if($taskStatus == 3) $tStatus = $this->_('Closed');
+		if($taskStatus == "") $tStatus = $this->_($tStatus);
+
+		$emailOption = (int) $post->dn_task_email;
+
+		$bodyText = $taskText;
+		//$bodyText = htmlentities($taskText, ENT_QUOTES, "UTF-8");
+		//$bodyText = str_replace("\n\n", "<p></p>", $bodyText);
+		//$bodyText = str_replace("\n", "<br />", $bodyText);
+
+		$domainName = $this->wire('config')->httpHost;
+		$adminURL = $this->wire('config')->urls->admin;
+
+		$companyName = $this->settings->companyName;
+		$companyEmail = $this->settings->companyEmail;
+		$companyPhone = $this->settings->companyPhone;
+		$companyAddress = $this->settings->companyAddress;
+
+		if($taskLimit == 1) $recipientMsg = "This task can be viewed by all team members";
+		if($taskLimit == 4) {
+			if($page->recipientNames) $recipientMsg = "This task can be viewed by the following team members:<strong> ".$page->recipientNames."</strong>.";
+			if(!$page->recipientNames) $recipientMsg = "No shared members. This task is a <strong>Private Task</strong>, only you as the task owner can view and edit this task.";
+		}
+
+		$bodyFooter = "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 20px 10px 0 10px;'>{$companyName}</p><p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 12px; padding: 20px 10px 0 10px;'>{$companyAddress}<br />{$companyPhone}</p>
+
+		<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 12px; padding: 20px 10px 0 10px; border-top: 1px solid #ccc;'><strong>DISCLAIMER:</strong><br /><i>The content of this message is confidential. If you have received it by mistake, please inform us by an email reply to {$companyEmail} and then delete the message. It is forbidden to copy, forward, or in any way reveal the contents of this message to anyone. The integrity and security of this email cannot be guaranteed over the Internet. Therefore, the sender will not be held liable for any damage caused by the message.</i>";
+
+		$copyRight = "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 20px 10px 0 10px;'>powered by MD COLLABS Processwire &copy; ".date('Y')." <a href='https://maxdev.com.au/'>MaxDev Australia</a></p>";
+
+
+
+		if($taskType == 1) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_notes.png' /></a>";
+
+		if($taskType == 2) {
+			// High
+			if ($taskPriority == 1) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_tasks_1.png' /></a>";
+			// Normal
+			if ($taskPriority == 2) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_tasks_2.png' /></a>";
+			// Low
+			if ($taskPriority == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_tasks_3.png' /></a>";
+		}
+
+		if ($taskType == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_mom.png' /></a>";
+
+		// Settings for Microsoft Outlook back to the old css inline
+		$thStyle1  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
+		$thStyle2  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
+		$tblStyle1 = "style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; padding: 0 0 10px 10px'";
+		$tblStyle2 = "style='text-align: right; color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; padding: 0 10px 10px 0'";
+		$tblStyle3 = "style='color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; padding: 10px 0 10px 10px'";
+
+		$bodyHTML = '';
+
+		$bodyHTML .= "<html><head><body>\n<table align='center' border='0' cellpadding='1' cellspacing='0' width='100%'><tr><td style='background: #e1f5fe'><table align='center' border='0' cellpadding='10' cellspacing='0' width='100%'>";
+
+		$bodyHTML .= "<tr><td $thStyle1>{$taskTitle}</td></tr>";
+		if($edate !="") $bodyHTML .= "<tr><td $tblStyle2><p>{$schedules}</td></tr>";
+		$bodyHTML .= "<tr><td $tblStyle1>{$bodyText}</td></tr>";
+
+		if($taskLocation !="") $bodyHTML .= "<tr><td $tblStyle1><strong>Location:</strong> {$taskLocation}</td></tr>";
+		if($edate =="") $bodyHTML .= "<tr><td $tblStyle2><p>{$sdate}</p></td></tr>";
+		if ($taskType == 2) $bodyHTML .= "<tr><td $tblStyle2>Case: {$tStatus} - {$tPriority} Priority</td></tr>";
+
+
+		$bodyHTML .= "<tr><td $thStyle1>{$btnOpenTask}</td></tr>";
+		$bodyHTML .= "</table></td></tr></table></body></html>\n\n";
+		$bodyHTML .= $bodyFooter;
+		$bodyHTML .= $copyRight;
+
+		$autoMsgSubject = "Autorespond: {$page->title}";
+
+		$autoMsg = "";
+
+		$autoMsg .= "
+			<p>Dear <strong>{$user->name}</strong>,</p>
+			<p>Your Task {$tTask} in regard to <strong>{$taskSubject}</strong> subject has been created. For correspondence reference, your Ticket Reference Number is <strong>{$page->name}</strong></p>
+			<p><strong>Your Task Content:</strong></p>
+			<p>{$bodyText}</p>
+			<p><strong>{$this->settings->taskGlobalMembersLabel}:</strong></p>
+			<p>{$recipientMsg}</p>
+			<p>{$btnOpenTask}</p>
+			<p>Thank You.</p>
+		";
+		$autoMsg .= $bodyFooter;
+		$autoMsg .= $copyRight;
+
+		/**
+		 * Email Option
+		 * keep default No Email
+		 */
+
+		// Group Task Send Email to All
+		if(($taskLimit == 1) && ($emailOption == 2))  {
+			foreach($this->wire('users') as $u) {
+				if(!$u->hasRole('task-user')) continue;
+				if($u->name == 'guest') continue;
+				if($u->id == '41') continue;
+
+				if ($u->email != $authorEmail) {
+					$memberEmail .= $u->email .", ";
+				}
+			}
+
+			$recipientEmails = trim($memberEmail, ", ");
+
+			$mail = wireMail();
+			$numSent = $mail->fromName($user->name)->from($user->email)->to($recipientEmails)->subject($taskSubject)->bodyHTML($bodyHTML)->send();
+
+		}
+
+		// Limited Users Task
+		if(($taskLimit == 4) && ($emailOption == 2)) {
+			$mail = wireMail();
+			$numSent = $mail->fromName($user->name)->from($user->email)->to($page->recipientEmails)->subject($taskSubject)->bodyHTML($bodyHTML)->send();
+		}
+
+		// send autorespon to task owner
+		if($emailOption == 1) {
+			$mail = wireMail();
+			$numSent = $mail->fromName($companyName)->from($companyEmail)->to($user->email)->subject($autoMsgSubject)->bodyHTML($autoMsg)->send();
+		}
+
+		// if task has limited visibility, we cache its ID and limitVisibilityIDs. this is for skipping this task from the selector to find tasks to prevent users without access from viewing the task
+		$savedCache = $this->getVisibilityLimitedTasksCache();
+		if($taskLimit > 1 && count($limitIDs)) {
+			$savedCache[$page->id] = $limitIDs;
+			$this->setVisibilityLimitedTasksCache($savedCache);
+		}
+		// else we remove it from cache just in case  visibility access was changed to 'all can view'
+		elseif(isset($savedCache[$page->id])) {
+			unset($savedCache[$page->id]);
+			$this->setVisibilityLimitedTasksCache($savedCache);
+		}
+
+		$this->message($this->_('Your Task has been saved.'));
+		// if limiting access and no access criteria values selected (i.e. no roles, permissions or users set), warn the user
+		if($taskLimit > 1 && !count($limitIDs)) {
+			$limitVisibilityByText = array(
+				2 => $this->_('Roles'),
+				3=> $this->_('Permissions'),
+				4 => $this->_('Users'),
+			);
+			$limitText = $limitVisibilityByText[$taskLimit];
+			$warning = sprintf(__('You need to specify the %1$s you wish to limit the visibility of this task by (%2$s).'), $limitText, "<em>$page->title</em>");
+			$this->warning($warning, Notice::allowMarkup);
+		}
+
+		/*
+			# determine redirection # @task: we preserve url param strings if possible!
+			- Five possibilities here:
+			1. Save and continue editing (default)
+			2. Save + Exit
+			3. Save + Add New task
+			4. Save + View task
+			5. Save + Edit next sibling task
+		*/
+
+		// save + exit: back to dashboard (keep pagination info!)
+		if('exit' == $taskAfterSave)  $session->redirect($this->baseURL . "/{$paginationNumberStr}");
+		// save + new: got to add new task screen. no need for any url param string
+		elseif('new' == $taskAfterSave) $session->redirect($this->baseURL . "/edit/");
+		// save + view: view this task but build correct url param string
+		elseif('view' == $taskAfterSave) $session->redirect($this->baseURL . "/view/{$page->id}/{$urlParamPageNumStr}");
+		// next: go edit next accessible task but build correct url param string for IT
+		// accessibility checks for two things: (i) can the user view the task? (ii) do the global settings allow editing each other's tasks?
+		// @task: these restrictions do not apply to superusers
+		elseif('next' == $taskAfterSave) {
+			// selector for finding tasks
+			$selector = "include=all,parent!=7";
+			if(!$user->isSuperuser()) {
+				// check for visibility restrictions
+				$excludedIDs = $this->getVisibilityLimitedTasksIDs();
+				if(strlen($excludedIDs)) $selector .= ",id!={$excludedIDs}";
+				// check for global editing restrictions (edit each other's tasks)
+				// if user can only edit their own tasks, add that to selector
+				if(2 == $this->settings->editOther) $selector .= ",created_users_id={$user->id}";
+			}
+			$next = $page->next($selector);
+			// @task: there is not guarantee that the next page will be on the same pagination as the current page! we can't help that
+			if($next->id) $pageID = $next->id;
+			// no next page, so stay where we are
+			else {
+				$pageID = $page->id;
+				// warning that no next task to edit found
+				$this->warning($this->_('No next task to edit.'));
+			}
+			$session->redirect($this->baseURL . "/edit/{$pageID}/{$urlParamPageNumStr}");
+		}
+		// stay on this page to continue editing it
+		else $session->redirect($this->baseURL . "/edit/{$page->id}/{$urlParamPageNumStr}");
+		//else $session->redirect($this->baseURL);
+
+	}
+
+	/**
+	 * Bulk actions for selected tasks.
+	 *
+	 * Actions are: lock, unlock, change priority (low/normal/high), trash and delete
+	 * @access private
+	 * @param array $post Input Post with tasks to bulk action.
+	 *
+	 */
+	private function saveBulkActions($post) {
+		$taskDoc = false;
+		$sanitizer = $this->wire('sanitizer');
+		$action = $sanitizer->fieldName($post->dn_action_select);
+		$tasksIDs = $sanitizer->intArray($post->dn_selected_tasks);
+		// hidden input that holds the pagination str in order to preserve for redirection after bulk action
+		$pageNumStr = $sanitizer->pageName($post->dn_task_pagination_num);
+
+		## catch submission errors
+
+		// no tasks selected for actioning @task: not really possible since "apply" button only shows in tasks selected. But just in case
+		if(!count($tasksIDs))  {
+			$this->error($this->_('No tasks selected for actioning!'));
+			return;
+		}
+		// no action selected
+		if(!$action)  {
+			$this->error($this->_('No action selected!'));
+			return;
+		}
+
+		$pages = $this->wire('pages');
+		$i = 0;
+		$j = 0;
+		$priorities = array('priority_high' => 1, 'priority_normal' => 2, 'priority_low' => 3);
+
+		// @todo: add startTime endTime
+		// @todo: 24hrs H:i
+
+		$statuses = array('status_open' => 1, 'status_closed' => 2, 'status_pending' => 3);
+		// check if DashboardDocs module installed
+		$taskDocName = "/".$this->wire('config')->urls->admin."dashboard-docs/";
+		$taskDocParent = $pages->get($taskDocName);
+		if($taskDocParent) $taskDoc = true;
+
+		foreach($tasksIDs as $taskID) {
+
+			## pre-processing checks ##
+			$page = $pages->get($taskID);
+			$pageName = "/".$this->wire('config')->urls->admin."dashboard-docs/docs/".$page->name;
+			if($taskDoc == true) $pageDocument = $pages->get($pageName);
+			if(!$page) {
+				$j++;
+				continue;
+			}
+
+			// if task locked for edits and action is not unlocking, skip it
+			if($page->is(Page::statusLocked) && $action !='unlock') {
+				$j++;
+				continue;
+			}
+
+			## apply actions ##
+
+			// lock/unlock
+			if(in_array($action, array('lock','unlock'))) {
+				// unlock task
+				if('unlock' == $action) {
+					$page->removeStatus(Page::statusLocked);
+					$page->save();
+					// confirm successfully unlocked
+					if (!$page->is(Page::statusLocked)) $i++;
+					else $j++;
+				}
+				// lock task
+				else {
+					$page->addStatus(Page::statusLocked);
+					$page->save();
+					// confirm successfully locked
+					if ($page->is(Page::statusLocked)) $i++;
+					else $j++;
+				}
+			}
+			// change priority
+			elseif(in_array($action, array('priority_low','priority_normal','priority_high'))) {
+				$priority = $priorities[$action];
+				$taskSettings = json_decode($page->dashboard_tasks_settings, true);
+				// if priority is normal, no need to save it but unset old value,
+				if(2 == $priority && isset($taskSettings['priority'])) unset($taskSettings['priority']);
+				// else set if low or high
+				else $taskSettings['priority'] = $priority;
+
+				if($priority == 1) {
+					$taskSettings['backgroundColour'] = "201, 30, 17, 1.0";
+					$taskSettings['textColour'] = "247, 222, 220, 1.0";
+				}
+				if($priority == 2) {
+					$taskSettings['backgroundColour'] = "255, 193, 8, 1.0";
+					$taskSettings['textColour'] = "55, 42, 4, 1.0";
+				}
+				if($priority == 3) {
+					$taskSettings['backgroundColour'] = "76, 175, 81, 1.0";
+					$taskSettings['textColour'] = "3, 55, 5, 1.0";
+				}
+
+				$page->dashboard_tasks_settings = wireEncodeJSON($taskSettings);
+				$page->save('dashboard_tasks_settings');
+				$i++;
+			}
+
+			// @todo: add startTime endTime
+			// @todo: 24hrs H:i
+
+			// change status
+			elseif(in_array($action, array('status_open','status_closed','status_pending'))) {
+				$status = $statuses[$action];
+				$taskSettings = json_decode($page->dashboard_tasks_settings, true);
+				if(1 == $status && isset($taskSettings['status'])) unset($taskSettings['status']);
+				else $taskSettings['status'] = $status;
+				$page->dashboard_tasks_settings = wireEncodeJSON($taskSettings);
+				$page->save('dashboard_tasks_settings');
+				$i++;
+			}
+
+			// trash/delete
+			elseif(in_array($action,array('trash','delete'))) {
+
+				// if users cannot delete each others tasks, skip if current user is not the task author
+				if(($this->settings->deleteOther == 2 && $page->createdUser != $this->wire('user')) || ($page->is(Page::statusLocked))){
+					$j++;
+					continue;
+				}
+				// delete
+				if('delete' == $action) {
+					//if (($this->wire('user')->hasPermission('dashboard-tasks-owners')) && ($page->createdUser == $this->wire('user'))) {
+						if ($page->createdUser == $this->wire('user')) {
+
+						if ($page->name == $pageDocument->name) $pageDocument->delete();
+
+						$page->delete();
+						$deletedPage = $pages->find("id=" . $taskID);
+						if(!$deletedPage->id) $i++;
+						else $j++;
+					}
+					if (($this->wire('user')->hasRole('superuser')) || ($this->wire('user')->hasPermission('dashboard-tasks-settings'))) {
+						$page->delete();// delete the page
+						$deletedPage = $pages->find("id=" . $taskID);
+						if(!$deletedPage->id) $i++;// confirm deleted
+						else $j++;// found page but for some reason failed to delete
+					}
+
+				}
+				// trash
+				else {
+					if (($this->wire('user')->hasPermission('dashboard-tasks-owners')) && ($page->createdUser == $this->wire('user'))) {
+
+						if ($page->name == $pageDocument->name) $pages->trash($pageDocument);
+
+						$pages->trash($page);
+						if($page->is(Page::statusTrash)) $i++;
+						else $j++;
+					}
+					if (($this->wire('user')->hasRole('superuser')) || ($this->wire('user')->hasPermission('dashboard-tasks-settings'))) {
+
+						if ($page->name == $pageDocument->name) $pages->trash($pageDocument);
+
+						$pages->trash($page);// trash the page
+						if($page->is(Page::statusTrash)) $i++;// confirm trashed;
+						else $j++;// found page but for some reason failed to trash
+					}
+
+				}
+
+			}
+
+		}// end foreach
+
+		## messages ##
+		// success messages
+		$actionTakenArray = array(
+			'success' => array(
+				'lock' => sprintf(_n("Locked %d task .", "Locked %d tasks.", $i), $i),
+				'unlock' => sprintf(_n("Unlocked %d task .", "Unlocked %d tasks.", $i), $i),
+				'priority_high' => sprintf(_n("High priority applied to %d task .", "High priority applied to %d tasks.", $i), $i),
+				'priority_normal' => sprintf(_n("Normal priority applied to %d task .", "Normal priority applied to %d tasks.", $i), $i),
+				'priority_low' => sprintf(_n("Low priority applied to %d task .", "Low priority applied to %d tasks.", $i), $i),
+
+				'status_open' => sprintf(_n("Case Open applied to %d task .", "Case Open applied to %d tasks.", $i), $i),
+				'status_closed' => sprintf(_n("Case Closed applied to %d task .", "Case Closed applied to %d tasks.", $i), $i),
+				'status_pending' => sprintf(_n("Pending Case applied to %d task .", "Pending Case applied to %d tasks.", $i), $i),
+
+				'trash' => sprintf(_n("Trashed %d task.", "Trashed %d tasks.", $i), $i),
+				'delete' => sprintf(_n("Deleted %d task.", "Deleted %d tasks.", $i), $i),
+			),
+			'fail' => array(
+				'lock' => $this->_("Unable to lock selected tasks."),
+				'unlock' => $this->_("Unable to unlock selected tasks."),
+				'priority' => $this->_("Unable to change priority of selected tasks."),
+				'status' => $this->_("Unable to change status of selected tasks."),
+				'trash' => $this->_("Unable to trash selected tasks"),
+				'delete' => $this->_("Unable to delete selected tasks"),
+			)
+		);
+
+		// success
+		if($i > 0) $this->message($actionTakenArray['success'][$action]);
+		// error
+		else {
+			$failActionString = in_array($action,array('priority_high','priority_normal','priority_low')) ? $actionTakenArray['fail']['priority'] : $actionTakenArray['fail'][$action];
+			$this->error($failActionString);
+		}
+
+		// warnings (locked or cannot delete each other's tasks)
+		if($j) {
+			$warningActionString = sprintf(_n("%d task locked for edits or cannot be trashed. No action applied to it.", "%d tasks locked for edits or cannot be trashed. No action applied to them.", $j), $j);
+			$this->warning($warningActionString);
+		}
+
+		$pageNumStr = $pageNumStr ? "/{$pageNumStr}" : "";
+		$this->wire('session')->redirect($this->baseURL . "{$pageNumStr}");
+
+	}
+
+	/**
+	 * Save one or more responses to a task or a task's existing responses.
+	 *
+	 * This can come from the main form on the page or forms built on the fly for nested responses.
+	 *
+	 * @access private
+	 * @param array $post Input Post with new responses to save.
+	 *
+	 */
+	private function saveTaskReply($post) {
+
+		$taskPageID = (int) $post->dn_task_page_id;
+		// send email or not
+		$taskSendEmail = (int) $post->dn_task_email;
+
+		// to do: task enquiry
+		$taskJobAcceptance = (int) $post->dn_task_job_acceptance;
+
+		// check if we have a page to save to
+		$page = $this->wire('pages')->get($taskPageID);
+		if(!$page) {
+			$this->error($this->_('We could not find that page!'));
+			$this->wire('session')->redirect($this->baseURL);
+		}
+
+		$user = $this->wire('user');
+		$sanitizer = $this->wire('sanitizer');
+
+		###### TASK ENQUIRY ############
+		/**
+		 * Job Enquiry Type sent to Task User /co-worker Role
+		 *
+		 * Changed the limitVisibility to Selected Users
+		 * if Job accepted by the first responder.
+		 * Hide the Job Acceptance Option
+		 */
+		// @to do: Job Quotes
+		// $taskSettings[''] = "";
+
+		if ($taskJobAcceptance == 1) {
+
+			$taskSettings = json_decode($page->dashboard_tasks_settings, true);
+
+			//$taskSettings['taskOwnerName'] = $page->createdUser->name;
+			$taskSettings['taskJobAcceptance'] = 1;
+			$taskSettings['taskJobAcceptanceStatus'] = $this->_('accepted');
+			$taskSettings['taskJobAcceptanceID'] = $user->id;
+			$taskSettings['taskJobAcceptanceName'] = $user->name;
+			$taskSettings['taskJobAcceptanceEmail'] = $user->email;
+			$taskSettings['taskJobAcceptanceDate'] = date("d-M-Y");
+			$taskSettings['taskJobAcceptanceTime'] = date("H:i");
+			$taskSettings['limitVisibility'] = 4;
+			$taskSettings['limitVisibilityIDs'] = array($user->id,$taskSettings['submitterID']);
+
+			$page->dashboard_tasks_settings = wireEncodeJSON($taskSettings);
+			$page->save('dashboard_tasks_settings');
+
+			###### JOB Documents ############
+			/**
+			 * If DashboardDocs installed
+			 *
+			 * We create a documents for this job
+			 *
+			 */
+
+			$parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+			$docParent = $this->wire('pages')->get("parent=$parent, template=admin, include=all, name=dashboard-docs");
+
+			//if exist create a doc page for task job
+			if($docParent->id && $docParent->id > 0) {
+				$p = new Page();
+				$p->template = "dashboard-doc";
+				$p->parent = $docParent->url."/docs/";
+				$p->name = $page->name;
+				$p->title = $this->_('Doc: ')." ".strtoupper($page->name);
+				$p->save();
+
+				$success = true;
+				$this->message('Thank you, your respond has been submitted.');
+			}
+		}
+
+		// hidden input that holds the pagination str in order to preserve for redirection and hence 'back to all links' to page where this task was at in the dashboard
+		$paginationNumberStr = $sanitizer->pageName($post->dn_task_pagination_num_str);
+		$urlParamPageNumStr = $paginationNumberStr ? "?page=" . $paginationNumberStr : "";
+
+		// direct response to task itself
+		// $taskResponseParentID = 0;// this will always be zero anyway
+		$taskResponseText = $sanitizer->textarea($post->dn_task_response_text);
+
+		// responses to existing comments/responses @task: arrays
+		$responsesToResponsesParentIDs = $post->dn_response_parent_id;
+		$responsesToResponsesText = $post->dn_response_text;
+
+		##  process and save comments/responses ##
+		$page->of(false);$i = 0;
+		// responses to responses
+		if(is_array($responsesToResponsesParentIDs) && count($responsesToResponsesParentIDs)) {
+			foreach($responsesToResponsesParentIDs as $key => $parentID) {
+				$text = $sanitizer->textarea($responsesToResponsesText[$key]);
+				// skip if no response text
+				if(!strlen($text)) continue;
+				// create and add new comment
+				$c = new Comment();
+				$c->text = $text;
+				$c->cite = $user->get('title|name');
+				$c->email = $user->email;// @todo: do we really need this?
+				$c->parent_id = (int) $parentID;
+				$c->created_users_id = $user->id;
+				$page->dashboard_task->add($c);
+				$i++;
+
+				// grab the comment text and clean it
+				$text = htmlentities($text, ENT_QUOTES, "UTF-8");
+				$text = str_replace("\n\n", "</p><p>", $text);
+				$text = str_replace("\n", "<br />", $text);
+
+				$taskOwnerEmail = $page->submitterEmail;
+				$authorEmail = $user->email;
+				$companyName = $this->settings->companyName;
+				$companyEmail = $this->settings->companyEmail;
+				$companyPhone = $this->settings->companyPhone;
+				$companyAddress = $this->settings->companyAddress;
+
+				if($taskSendEmail == 2) {
+
+					##### Send Email #####
+					$bodyText = '';
+					$bodyText .= "<p>Hi <strong>{$page->submitterName}</strong>,<br /><br />You have got a respond in the thread messages from this task's subject: <i>{$page->subject}</i>. </p>";
+					$bodyText .= "<p>Messages from <strong>{$user->name}</strong>:</p>";
+					$bodyText .= "<p>".$text."</p>";
+
+					$domainName = $this->wire('config')->httpHost;
+					$adminURL = $this->wire('config')->urls->admin;
+
+					$copyRight = "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 20px 10px 0 10px;'>powered by MD COLLABS Processwire &copy; ".date('Y')." <a href='https://maxdev.com.au/'>MaxDev Australia</a></p>";
+
+					if ($page->taskType == 1) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_view-task-notes-responses.png' /></a>";
+
+					if ($page->taskType == 2) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_view-task-responses.png' /></a>";
+
+					if ($page->taskType == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_view-task-report-responses.png' /></a>";
+
+					// Settings for Microsoft Outlook back to the old css inline
+					$thStyle1  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
+					$thStyle2  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
+					$tblStyle1 = "style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; padding: 0 0 10px 10px'";
+					$tblStyle2 = "style='text-align: right; color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; padding: 0 10px 10px 0'";
+					$tblStyle3 = "style='color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; padding: 10px 0 10px 10px'";
+
+					$bodyHTML = '';
+
+					$bodyHTML .= "<html><head><body>\n<table align='center' border='0' cellpadding='1' cellspacing='0' width='100%'><tr><td style='background: #e1f5fe'>";
+					$bodyHTML .= "<table align='center' border='0' cellpadding='10' cellspacing='0' width='100%'>";
+
+					$bodyHTML .= "<tr><td $thStyle1>{$page->title}</td></tr>";
+					$bodyHTML .= "<tr><td $tblStyle1>{$bodyText}</td></tr>";
+					$bodyHTML .= "<tr><td $thStyle1>{$btnOpenTask}</td></tr>";
+
+					$bodyHTML .= "</table>";
+					$bodyHTML .= "</td></tr></table></body></html>\n\n";
+
+					$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; font-weight:bold; padding: 0 10px 0 10px'>{$companyName}</p>";
+					$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 0 10px 0 10px'>{$companyAddress}<br />{$companyAddress}</p>";
+
+					$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 12px; padding: 0 10px 0 10px'><strong>DISCLAIMER:</strong><br /><i>The content of this message is confidential. If you have received it by mistake, please inform us by an email reply to {$companyEmail} and then delete the message. It is forbidden to copy, forward, or in any way reveal the contents of this message to anyone. The integrity and security of this email cannot be guaranteed over the Internet. Therefore, the sender will not be held liable for any damage caused by the message.</i>{$copyRight}";
+
+					$mail = $this->wire('mail')->new();
+					$numsent = $mail->fromName($user->name)->from($user->email)->to($page->submitterEmail)->subject($page->subject)->bodyHTML($bodyHTML)->send();
+
+				}
+			}
+		}
+
+		// add main/direct response to task
+		if(strlen($taskResponseText)) {
+			$c = new Comment();
+			$c->text = $taskResponseText;
+			$c->cite = $user->get('title|name');
+			$c->email = $user->email;// @todo: do we really need this?
+			$c->created_users_id = $user->id;
+			$page->dashboard_task->add($c);
+			$i++;
+
+			if($taskSendEmail == 2) {
+				// grab the comment text and clean it
+				$taskResponseText = htmlentities($taskResponseText, ENT_QUOTES, "UTF-8");
+				$taskResponseText = str_replace("\n\n", "</p><p>", $taskResponseText);
+				$taskResponseText = str_replace("\n", "<br />", $taskResponseText);
+
+				##### Send Email #####
+				$bodyText = '';
+				$bodyText .= "<p>Hi <strong>{$page->submitterName}</strong>,<br /><br />You have got a respond in regard to this task's subject: <i>{$page->subject}</i>. </p>";
+				$bodyText .= "<p>Messages from <strong>{$user->name}</strong>:</p>";
+				$bodyText .= "<p>".$taskResponseText."</p>";
+
+				$domainName = $this->wire('config')->httpHost;
+				$adminURL = $this->wire('config')->urls->admin;
+
+				$copyRight = "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 20px 10px 0 10px;'>powered by MD COLLABS Processwire &copy; ".date('Y')." <a href='https://maxdev.com.au/'>MaxDev Australia</a></p>";
+
+				if ($page->taskType == 1) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_view-task-notes-responses.png' /></a>";
+
+				if ($page->taskType == 2) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_view-task-responses.png' /></a>";
+
+				if ($page->taskType == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_view-task-report-responses.png' /></a>";
+
+				// Settings for Microsoft Outlook back to the old css inline
+				$thStyle1  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
+				$thStyle2  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
+				$tblStyle1 = "style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; padding: 0 0 10px 10px'";
+				$tblStyle2 = "style='text-align: right; color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; padding: 0 10px 10px 0'";
+				$tblStyle3 = "style='color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; padding: 10px 0 10px 10px'";
+
+				$bodyHTML = '';
+
+				$bodyHTML .= "<html><head><body>\n<table align='center' border='0' cellpadding='1' cellspacing='0' width='100%'><tr><td style='background: #e1f5fe'>";
+				$bodyHTML .= "<table align='center' border='0' cellpadding='10' cellspacing='0' width='100%'>";
+
+				$bodyHTML .= "<tr><td $thStyle1>{$page->title}</td></tr>";
+				$bodyHTML .= "<tr><td $tblStyle1>{$bodyText}</td></tr>";
+				$bodyHTML .= "<tr><td $thStyle1>{$btnOpenTask}</td></tr>";
+
+				$bodyHTML .= "</table>";
+				$bodyHTML .= "</td></tr></table></body></html>\n\n";
+
+				$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; font-weight:bold; padding: 0 10px 0 10px'>{$companyName}</p>";
+				$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 0 10px 0 10px'>{$companyAddress}<br />{$companyAddress}</p>";
+
+				$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 12px; padding: 0 10px 0 10px'><strong>DISCLAIMER:</strong><br /><i>The content of this message is confidential. If you have received it by mistake, please inform us by an email reply to {$companyEmail} and then delete the message. It is forbidden to copy, forward, or in any way reveal the contents of this message to anyone. The integrity and security of this email cannot be guaranteed over the Internet. Therefore, the sender will not be held liable for any damage caused by the message.</i>{$copyRight}";
+
+				$mail = $this->wire('mail')->new();
+				$numsent = $mail->fromName($user->name)->from($user->email)->to($page->submitterEmail)->subject($page->subject)->bodyHTML($bodyHTML)->send();
+
+			}
+		}
+
+		## save + messages ##
+		if($i) {
+			$page->save('dashboard_task');
+			$page->of(true);
+			$message = sprintf(_n("Save %d response.", "Saved %d responses.", $i), $i);
+			$this->message($message);
+		}
+		else $this->error($this->_('No responses received!'));
+
+		$this->wire('session')->redirect($this->baseURL . "/view/{$page->id}/{$urlParamPageNumStr}");
+	}
+
+	/**
+	 * Save global default tasks settings.
+	 *
+	 * @access private
+	 * @param array $post Input Post with tasks settings.
+	 *
+	 */
+	private function saveSettings($post) {
+
+		// $pages = $this->wire('pages');
+		$sanitizer = $this->wire('sanitizer');
+
+		$tasksSettingsPage = $this->wire('page')->child('include=all,template=dashboard-tasks');
+
+		// settings
+		$settingsArray = array();
+		// brand name
+		$settingsArray['companyName'] =  $sanitizer->text($post->dn_task_company_name);
+		$settingsArray['companyEmail'] = $sanitizer->text($post->dn_task_company_email);
+		$settingsArray['companyPhone'] =  $sanitizer->text($post->dn_task_company_phone);
+		$settingsArray['companyAddress'] = $sanitizer->text($post->dn_task_company_address);
+
+		// Global Label Settings
+		$settingsArray['taskGlobalTaskLabel'] =  $sanitizer->text($post->dn_task_global_label_task);
+		$settingsArray['taskGlobalRespondLabel'] = $sanitizer->text($post->dn_task_global_label_respond);
+		$settingsArray['taskGlobalLocationLabel'] =  $sanitizer->text($post->dn_task_global_label_location);
+		$settingsArray['taskGlobalMembersLabel'] = $sanitizer->text($post->dn_task_global_label_members);
+
+		$settingsArray['taskGlobalManagersLabel'] =  $sanitizer->text($post->dn_task_global_label_managers);
+		$settingsArray['taskGlobalOwnersLabel'] =  $sanitizer->text($post->dn_task_global_label_owners);
+		$settingsArray['taskGlobalCoworkersLabel'] =  $sanitizer->text($post->dn_task_global_label_coworkers);
+		$settingsArray['taskGlobalSubmittedLabel'] =  $sanitizer->text($post->dn_task_global_label_submitted);
+
+		// Global Button Label Settings
+		$settingsArray['taskGlobalButtonSaveLabel'] =  $sanitizer->text($post->dn_task_global_label_button_save);
+		$settingsArray['taskGlobalButtonSaveSentLabel'] = $sanitizer->text($post->dn_task_global_label_button_save_sent);
+		$settingsArray['taskGlobalButtonRespondLabel'] =  $sanitizer->text($post->dn_task_global_label_button_respond);
+		$settingsArray['taskGlobalButtonEditDocumentLabel'] = $sanitizer->text($post->dn_task_global_label_button_edit_document);
+
+		// Tasks Selection Label
+		$settingsArray['taskNotesLabel'] =  $sanitizer->text($post->dn_task_notes_label);
+		$settingsArray['taskSchedulerLabel'] = $sanitizer->text($post->dn_task_scheduler_label);
+		$settingsArray['taskReportsLabel'] =  $sanitizer->text($post->dn_task_reports_label);
+		$settingsArray['taskDocumentsLabel'] = $sanitizer->text($post->dn_task_documents_label);
+
+		// dates
+		$settingsArray['dateFormat'] = (int) $post->dn_task_date_format;
+		$settingsArray['dateMonthLabel'] = (int) $post->dn_task_date_month_label;
+		$settingsArray['textColour'] = $sanitizer->text(str_replace(array("rgba(", ")"), "", $post->dn_task_text_colour));
+		$settingsArray['backgroundColour'] = $sanitizer->text(str_replace(array("rgba(", ")"), "", $post->dn_task_background_colour));
+		$settingsArray['sort'] = (int) $post->dn_task_sort;
+		$settingsArray['sortDir'] = (int) $post->dn_task_sort_direction;
+		$settingsArray['editOther'] = (int) $post->dn_task_edit_others;
+		$settingsArray['deleteOther'] = (int) $post->dn_task_delete_others;
+		$settingsArray['displayMax'] = (int) $post->dn_task_max_display;
+		$settingsArray['maxReply'] = (int) $post->dn_task_max_reply_depth;
+		// max characters for truncation for subject in task view
+		$settingsArray['truncateMax'] = (int) $post->dn_task_truncate_max;
+		// images thumbnails
+		$settingsArray['width'] = (int) $post->dn_task_width;
+		$settingsArray['height'] = (int) $post->dn_task_grid_gap;
+
+		// save
+		$settingsJSON = count($settingsArray) ? wireEncodeJSON($settingsArray) : '';// @task: wont save empties
+		$tasksSettingsPage->dashboard_tasks_settings = $settingsJSON;
+		$tasksSettingsPage->save('dashboard_tasks_settings');
+
+		$this->message($this->_('Settings saved.'));
+		// @task: needed to properly reload page, i.e. to trigger loading of JS config scripts, hence redirect here
+		$this->wire('session')->redirect($this->baseURL . "/settings/");
+
+	}
+
+	/* ######################### - GETTERS - ######################### */
+	/**
+	 * Get limited number of tasks to display in dashboard.
+	 *
+	 * @access private
+	 * @return PageArray $tasks Limited number of tasks pages.
+	 *
+	 */
+	private function getTasks() {
+
+		$limit = (int) $this->settings->displayMax;
+
+		$sorting = array(1=>"created",2=>"title",3=>"priority");
+		$sort = $sorting[(int)$this->settings->sort];
+		if(2 == $this->settings->sortDir) $sort = "-{$sort}";
+
+		// selector for finding tasks
+		$selector = "template=dashboard-task,include=all,parent!=7,limit={$limit},sort=$sort";
+		/*
+			- for non-superusers only...
+			- check if we have visibility limited tasks that current user cannot view
+			- if true we exclude them using IDs
+		*/
+		if(!$this->wire('user')->isSuperuser()) {
+			$excludedIDs = $this->getVisibilityLimitedTasksIDs();
+			if(strlen($excludedIDs)) $selector .= ",id!={$excludedIDs}";
+		}
+
+		$tasks = $this->wire('pages')->find($selector);
+
+		if($tasks->count()) {
+			// set extra task properties (priority, etc)
+			$tasks->each(function($task) use($tasks){
+				$taskSettingsJSON = $task->dashboard_tasks_settings;
+				$data = json_decode($taskSettingsJSON, true);
+				if(is_array($data) && count($data))$task->setArray($data);
+			});
+
+			// sort tasks by priority if required (in-memory)
+			if($this->settings->sort == 3) $tasks->sort("{$sort}");
+		}
+
+		return $tasks;
+
+	}
+
+	/**
+	 * Fetch cached data for tasks whose visibility is limited.
+	 *
+	 * Only tasks whose visibity is limited (value>2) are cached.
+	 * We use this to exclude from the dashboard tasks that the current user is not allowed to see.
+	 * We use the IDs of the tasks in the selector to get tasks. @see getTasks()
+	 *
+	 * @access private
+	 * @return array $cacheData Array of tasks pages IDs that will be excluded from find tasks selector.
+	 *
+	 */
+	private function getVisibilityLimitedTasksCache() {
+		$cacheName = 'dashboard-tasks';
+		$cacheData = $this->wire('cache')->get($cacheName);
+		$cacheData = is_array($cacheData) ? $cacheData : array();
+		return $cacheData;
+	}
+
+	/**
+	 * Get IDs of task pages that the current user has no visibility access to.
+	 *
+	 * We use this to exclude from the dashboard tasks that the current user is not allowed to see.
+	 * We use the IDs of the tasks in the selector to get tasks. @see getTasks()
+	 *
+	 * @access private
+	 * @return string $excludedIDsStr If exclusions found, pipe-separated string of page IDs of tasks user cannot view, else empty.
+	 *
+	 */
+	private function getVisibilityLimitedTasksIDs() {
+
+		$excludedIDsStr = "";
+		$excludedIDsCache = $this->getVisibilityLimitedTasksCache();
+
+		// get array of current user's ID, roles IDs and permission IDs
+		$userIDs = $this->getUserIDs();
+		if(is_array($excludedIDsCache) && count($excludedIDsCache)) {
+			$excludedIDs = array();
+			foreach ($excludedIDsCache as $pageID => $limitIDs) {
+				// user has access, so skip @task: this works because users, roles and permissions are all pages, hence have unique page IDs
+				if(count(array_intersect($userIDs, $limitIDs))) continue;
+				// array of pageIDs of tasks user cannot view
+				$excludedIDs[] = $pageID;
+			}
+			if(count($excludedIDs)) $excludedIDsStr = implode("|",$excludedIDs);
+		}
+
+		return $excludedIDsStr;
+
+	}
+
+	/**
+	 * Get IDs of current users ID, roles and permissions.
+	 *
+	 * Uses in conjunction with getVisibilityLimitedTasksIDs() to determine IDs of pages of tasks that the user does not have access to.
+	 *
+	 * @access private
+	 * @return array $userIDs Array of IDs of current users IDs, roles and permissions.
+	 *
+	 */
+	private function getUserIDs() {
+
+		$user = $this->wire('user');
+		$userIDs = array();
+
+		// for user limited tasks
+		$userIDs[] = $user->id;
+		// for role limited tasks
+		foreach($user->roles as $role) {
+			if($role->name == 'guest') continue;
+			$userRoles[] = $role->id;
+		}
+		// for permission limited tasks
+		$userPermissions = $user->getPermissions()->explode('id');
+		$userIDs = array_merge($userIDs, $userRoles, $userPermissions);
+
+		return $userIDs;
+
+	}
+
+	/**
+	 * Get all user's roles (minus guest) for selection for task visibility.
+	 *
+	 * @task: we limit these to only the current user's permissions.
+	 * It doesn't make sense to access-control if user will not have access to that role.
+	 *
+	 * @access private
+	 * @return array $roles Array of role->id=>role->name pairs of this user's roles.
+	 *
+	 */
+	private function getRoles() {
+		$roles = array();
+		foreach($this->wire('user')->roles as $role) {
+			if($role->name == 'guest') continue;
+			if($role->name == 'superuser') continue;
+			if($role->name == 'task-owner') continue;
+			if ($role->name == 'task-user') $roleLabel = $this->_('Co Workers');
+			//if ($role->name == 'task-owner') $roleLabel = $this->_('Task Owners');
+			if ($role->name == 'task-manager') $roleLabel = $this->_('Task Managers');
+			$roles[$role->id] = $roleLabel;
+		}
+		return $roles;
+	}
+
+	/**
+	 * Get all user's permissions for selection for task visibility.
+	 *
+	 * @task: we limit these to only the current user's permissions.
+	 * It doesn't make sense to access-control if user will not have access to that role.
+	 *
+	 * @access private
+	 * @return array $permissions Array of permission->id=>permission->name pairs of this user's permissions.
+	 *
+	 */
+	private function getPermissions() {
+		$permissions = array();
+		foreach($this->wire('user')->getPermissions() as $permission) {
+			$permissions[$permission->id] = $permission->get("title|name");
+		}
+		return $permissions;
+	}
+
+	/**
+	 * Get all users (minus guest user) for selection for task visibility.
+	 *
+	 * @access private
+	 * @return array $users Array of user->id=>user->title/name pairs of site users.
+	 *
+	 */
+	private function getUsers() {
+		// @todo: should non-superusers be able to see superusers names in this list? I don't think so?! or?
+		// @todo: this will also list frontend users as well! Filter them out?
+		$users = array();
+		foreach($this->wire('users') as $user) {
+			if(!$user->hasRole('task-user')) continue;
+			if($user->name == 'guest') continue;
+			if($user->id == '41') continue;
+			$users[$user->id] = $user->get("name|email");
+		}
+		return $users;
+	}
+
+	/* ######################### - SETTERS - ######################### */
+
+	/**
+	 * Set class properties for adding versus editing a task.
+	 *
+	 * @access private
+	 *
+	 */
+	private function setTaskValues() {
+
+		// to do: enquiry type
+		$defaultSettings = array('taskEnquiryType'=>2,'priority'=>2,'status'=>1,'textColour'=>0,'backgroundColour'=>0,'reply'=>1,'locked'=>2,'limitVisibility'=>4,'limitVisibilityIDs'=>array());
+		$savedSettings = array();
+
+		$taskPageID =  $this->wire('sanitizer')->pageName($this->wire('input')->urlSegment2);
+
+		if($taskPageID) {
+			$page = $this->wire('pages')->get($taskPageID);
+			if($page->id > 0) {
+				$this->task = $page;
+				// ## settings ##
+				$savedSettings = json_decode($page->dashboard_tasks_settings, true);
+				if($page->is(Page::statusLocked)) $savedSettings['locked'] = 1;
+			}
+			// no page found, go back to all tasks
+			else $this->wire('session')->redirect($this->baseURL);
+		}
+		// new task: instantiate empty WireData()
+		else {
+			$this->task = new WireData();
+			// check if we have default colours for NEW tasks set
+			if($this->settings->textColour) $defaultSettings['textColour'] = $this->settings->textColour;
+			if($this->settings->backgroundColour) $defaultSettings['backgroundColour'] = $this->settings->backgroundColour;
+		}
+
+		$settings = array_merge($defaultSettings,$savedSettings);
+
+		// set property values to WireData $this->settings;
+		$this->task->setArray($settings);
+		// @task: these task colour properties are  also used for JS config scripts sent to browser
+		$this->taskTextColour = $this->task->textColour;
+		$this->taskBackgroundColour = $this->task->backgroundColour;
+
+	}
+
+	/**
+	 * Set class properties for global settings.
+	 *
+	 * @access private
+	 *
+	 */
+	private function setGlobalTaskValues() {
+
+		$defaultSettings = array(
+			'companyName'=>"Company Brand Name",
+			'companyEmail'=>"info@yourdomainname.com",
+			'companyPhone'=>"+6100000000",
+			'companyAddress'=>"Your Location",
+			'taskGlobalTaskLabel'=>"Tasks",
+			'taskGlobalRespondLabel'=>"Messages",
+			'taskGlobalLocationLabel'=>"Location",
+			'taskGlobalMembersLabel'=>"Members",
+			'taskGlobalManagersLabel'=>"Task Manager",
+			'taskGlobalOwnersLabel'=>"Task Owner",
+			'taskGlobalCoworkersLabel'=>"Task Co-worker",
+			'taskGlobalSubmittedLabel'=>"Submitted",
+			'taskGlobalButtonSaveLabel'=>"Save Draft",
+			'taskGlobalButtonSaveSentLabel'=>"Save & Send Email",
+			'taskGlobalButtonRespondLabel'=>"Reply",
+			'taskGlobalButtonEditDocumentLabel'=>"Attachment",
+			'taskNotesLabel'=>"Notes",
+			'taskSchedulerLabel'=>"Task Scheduler",
+			'taskReportsLabel'=>"Reports",
+			'taskDocumentsLabel'=>"Documents",
+			'dateFormat'=>1,
+			'dateMonthLabel'=>2,
+			'textColour'=>"28,40,37,1.0",
+			'backgroundColour'=>"62,185,152,.2",
+			'sort'=>1,
+			'sortDir'=>2,
+			'editOther'=>2,
+			'deleteOther'=>2,
+			'displayMax'=>20,
+			'maxReply'=>2,
+			'truncateMax'=>80,
+			'width'=>80,
+			'gridGap'=>10
+		);
+
+		$tasksSettingsPage = $this->wire('page')->child('include=all');
+		$savedSettingsJSON = $tasksSettingsPage->dashboard_tasks_settings;
+		$savedSettings = $savedSettingsJSON ? json_decode($savedSettingsJSON, true) : array();
+		$settings = array_merge($defaultSettings,$savedSettings);
+		// set property values to WireData $this->settings;
+		$this->settings->setArray($settings);
+		// @task: these task colour properties are  also used for JS config scripts sent to browser
+		$this->taskTextColour = $this->settings->textColour;
+		$this->taskBackgroundColour = $this->settings->backgroundColour;
+
+	}
+
+	/**
+	 * Create cache of tasks whose visibility is limited.
+	 *
+	 * This is for use with saveTask().
+	 *
+	 * @access private
+	 * @param array $items Array of $task->id => $task->limitVisibilityIDs pairs to cache.
+	 *
+	 */
+	private function setVisibilityLimitedTasksCache($items) {
+		$cacheName = 'dashboard-tasks';
+		$this->wire('cache')->save($cacheName, $items, WireCache::expireNever);
+	}
+
+	/* ######################### - UTILITIES - ######################### */
+	/**
+	 * Check if a user has access to view/edit the specified task page based on task's visibility criteria.
+	 *
+	 * Access can be limited by role, permissions or users.
+	 * If in dashboard, skip to display such pages.
+	 * If URL to view/edit accessed directly, we will redirect to dashboard (task here!).
+	 *
+	 * @access private
+	 * @param Page $task The Task whose access is to be determined.
+	 * @return bool $access True if user has access else false
+	 *
+	 */
+	private function checkAccess($task) {
+
+		$access = false;
+
+		$user = $this->wire('user');
+		$limitIDs = $task->limitVisibilityIDs;
+		$visibility = $task->limitVisibility;
+
+		// if no limitVisibilityIDs set, just return true @task: on save, users are warned about this!
+		if(!is_array($limitIDs) || !count($limitIDs)) return true;
+
+		// check access: roles
+		if(2 == $visibility) {
+			// iterate saved IDs to limit by and check for first hit in user roles then break
+			foreach($limitIDs as $id) {
+				if($user->hasRole($id)) {
+					$access = true;
+					break;
+				}
+			}
+		}
+		// check access: permission
+		elseif(3 == $visibility) {
+			// iterate saved IDs to limit by and check for first hit in user permissions then break
+			foreach($limitIDs as $id) {
+				if($user->hasPermission($id)) {
+					$access = true;
+					break;
+				}
+			}
+		}
+		// check access: users (but NOT SUPERUSERS!)
+		elseif(4 == $visibility) {
+			// if current logged in user's ID is one of the allowed user ids OR is a superuser, access is true
+			if(in_array($user->id,$limitIDs) || $user->isSuperuser()) $access = true;
+		}
+
+		return $access;
+
+	}
+
+	/**
+	 * Determines if a user can edit a given task based on certain global restrictions.
+	 *
+	 * If user is superuser, user can edit.
+	 * If global settings do not allow authors to edit each other's tasks but current user is task author, user can edit.
+	 * If there are no global restrictions, user can edit.
+	 * No editing allowed in all other cases.
+	 *
+	 * @access private
+	 * @param Page $task The Task whose editing access is to be determined.
+	 * @return bool $canEdit True if user can edit Task page, else false.
+	 *
+	 */
+	private function checkEdit($task) {
+		$user = $this->wire('user');
+		$canEdit = false;
+		if(1 == $this->settings->editOther || $task->createdUser == $user || $user->isSuperuser() || !$task->id) $canEdit = true;
+		return $canEdit;
+	}
+
+	/* ######################### - INSTALL - ######################### */
+	public function ___install() {
+		if($this->verifyInstall($mode = null) == true) {
+			$page = new Page();
+			$page->template = 'admin';
+			$page->parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+			$page->title = 'Tasks';
+			$page->name = self::PAGE_NAME;
+			$page->process = $this;
+			$page->save();
+
+			$this->verifyInstall($mode = 1);
+
+			$this->message("Dashboard Tasks: Created page {$page->path}");
+		}
+		else throw new WireException($this->_('Dashboard Tasks: Installation aborted. Check and fix reported errors first.'));
+		$perms = array(
+			'dashboard-tasks' => $this->_('Dashboard Tasks User'),
+			'dashboard-tasks-settings' => $this->_('Dashboard Tasks Settings'),
+			'dashboard-tasks-owners' => $this->_('Dashboard Tasks Owner'),
+		);
+		foreach ($perms as $k => $v) {
+			$permission = $this->wire('permissions')->get($k);
+			if (!$permission->id) {
+				$p = new Permission();
+				$p->name = $k;
+				$p->title = $v;
+				$p->save();
+			}
+			if($permission->id) $this->message("Added permission: $p->title");
+		}
+
+		// add roles
+		$roles = $this->wire('roles');
+		$uroles = array(
+			'task-user',
+			'task-owner',
+			'task-manager',
+		);
+
+		foreach ($uroles as $k) {
+			$role = $roles->get($k);
+			if (!$role->id) {
+				$role = $roles->add($k);
+				if($role->id) $this->message("Added role: $role->name");
+			}
+			if ($role == 'task-user') $role->addPermission('dashboard-tasks');
+		}
+
+		//assigned Permissions to roles
+		$role = $roles->get('task-user');
+		$role->addPermission('dashboard-tasks');
+		$role->addPermission('page-edit');
+		$role->addPermission('page-delete');
+		$role->save();
+
+		$role = $roles->get('task-owner');
+		$role->addPermission('dashboard-tasks');
+		$role->addPermission('dashboard-tasks-owners');
+		$role->save();
+
+		$role = $roles->get('task-manager');
+		$role->addPermission('dashboard-tasks');
+		$role->addPermission('dashboard-tasks-owners');
+		$role->addPermission('dashboard-tasks-settings');
+		$role->save();
+
+		$u = new User();
+		$u->of(false);
+		$u->template = ('user');
+		$u->name = ('task-coworker1');
+		$u->pass = 'task-coworker1';
+		$u->email = 'task-coworker1@'.$this->wire('config')->httpHost;
+		$u->addRole('task-user');
+		$u->save();
+
+		$u = new User();
+		$u->of(false);
+		$u->template = ('user');
+		$u->name = ('task-coworker2');
+		$u->pass = 'task-coworker2';
+		$u->email = 'task-coworker2@'.$this->wire('config')->httpHost;
+		$u->addRole('task-user');
+		$u->save();
+
+		$u = new User();
+		$u->of(false);
+		$u->template = ('user');
+		$u->name = ('task-coworker3');
+		$u->pass = 'task-coworker3';
+		$u->email = 'task-coworker3@'.$this->wire('config')->httpHost;
+		$u->addRole('task-user');
+		$u->save();
+
+		$u = new User();
+		$u->of(false);
+		$u->template = ('user');
+		$u->name = ('task-owner');
+		$u->pass = 'task-owner';
+		$u->email = 'task-owner@'.$this->wire('config')->httpHost;
+		$u->addRole('task-user');
+		$u->addRole('task-owner');
+		$u->save();
+
+		$u = new User();
+		$u->of(false);
+		$u->template = ('user');
+		$u->name = ('task-manager');
+		$u->pass = 'task-manager';
+		$u->email = 'task-manager@'.$this->wire('config')->httpHost;
+		$u->addRole('task-user');
+		$u->addRole('task-manager');
+		$u->save();
+
+		// create task demo
+		$parent = $this->wire('config')->urls->admin."dashboard-tasks/tasks/";
+		$template = $this->wire('templates')->get('dashboard-task');
+
+	}
+
+	public function ___uninstall() {
+		$pages = $this->wire('pages');
+
+		$moduleID = $this->wire('modules')->getModuleID($this);
+		$dnPage = $pages->get("template=admin, process=$moduleID, name=" . self::PAGE_NAME);
+
+		$tusers = $this->wire('users')->find('template=user,roles=task-user');
+		foreach ($tusers as $t) {
+			if ($t->name == "task-coworker1") $t->delete();
+			if ($t->name == "task-coworker2") $t->delete();
+			if ($t->name == "task-coworker3") $t->delete();
+			if ($t->name == "task-owner") $t->delete();
+			if ($t->name == "task-manager") $t->delete();
+
+		}
+
+		if($dnPage->id) {
+			$this->message($this->_('Dashboard Tasks: Deleted Page: ') . $dnPage->path);
+			$pages->delete($dnPage, true);
+			foreach ($pages->find('template=dashboard-task, status>=' . Page::statusTrash) as $p) $p->delete();
+		}
+
+		$perms = array('dashboard-tasks','dashboard-tasks-settings','dashboard-tasks-owners');
+
+		foreach ($perms as $p) {
+			$permission = $this->wire('permissions')->get($p);
+			if ($permission->id) $permission->delete();
+		}
+
+		$this->message('Dashboard Tasks: Deleted permissions dashboard-tasks, dashboard-tasks-settings and dashboard-tasks-owners.');
+
+		$r = array('task-user','task-owner','task-manager');
+		foreach ($r as $p) {
+			$roles = $this->wire('roles')->get($p);
+			if ($roles->id) $roles->delete();
+		}
+
+		$this->message('Dashboard Tasks: Deleted roles task-user, task-owner and task-manager.');
+
+		$templates = array('dashboard-task', 'dashboard-tasks');
+		foreach ($templates as $template) {
+			$t = $this->wire('templates')->get($template);
+			if($t->id) {
+				$this->wire('templates')->delete($t);
+				$this->wire('fieldgroups')->delete($t->fieldgroup);
+			}
+		}
+		$this->message('Dashboard Tasks: Deleted Templates dashboard-task and dashboard-tasks');
+		$fields = array('dashboard_task', 'dashboard_tasks_settings');
+		foreach ($fields as $field) {
+			$f = $this->wire('fields')->get($field);
+			if($f->id) $this->wire('fields')->delete($f);
+		}
+		$this->message('Dashboard Tasks: Deleted Fields dashboard_task and dashboard_tasks_settings');
+		$this->wire('cache')->delete("dashboard-tasks");
+
+	}
+
+	public function verifyInstall($mode = null) {
+		$pageCheck = '';
+
+		if($mode == 1) return $this->createFields();
+
+		$parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+		$page = $this->wire('pages')->get("parent=$parent, template=admin, include=all, name=".self::PAGE_NAME);
+		if($page->id && $page->id > 0) $pageCheck = $page->title;
+
+		$pageExist = $pageCheck ? true : false;
+
+		$fields  = array('task' => 'dashboard_task','settings' => 'dashboard_tasks_settings');
+
+		$fieldsCheck = array();
+		foreach ($fields as $key => $value) {if($this->wire('fields')->get($value)) $fieldsCheck [] = $this->wire('fields')->get($value)->name;}
+		$fieldsExist = count($fieldsCheck) ? true : false;
+
+		$templates = array('task' => 'dashboard-task','tasks' => 'dashboard-tasks');
+
+		$templatesCheck = array();
+		foreach ($templates as $template) {if($this->wire('templates')->get($template)) $templatesCheck [] = $this->wire('templates')->get($template)->name;}
+
+		$templatesExist = count($templatesCheck) ? true : false;
+
+		if($pageExist == true){
+			$failedPage = $pageCheck;
+			$this->error($this->_("Cannot install Dashboard Tasks Admin page. A page named 'dashboard-tasks' is already in use under Admin. Its title is: {$failedPage}."));
+		}
+
+		if($fieldsExist == true){
+			$failedFields = implode(', ', $fieldsCheck);
+			$this->error($this->_("Cannot install Dashboard Tasks fields. Some field names already in use. These are: {$failedFields}."));
+		}
+
+		if($templatesExist == true){
+			$failedTemplates = implode(', ', $templatesCheck);
+			$this->error($this->_("Cannot install Dashboard Tasks templates. Some template names already in use. These are: {$failedTemplates}."));
+		}
+
+		if($pageExist == true || $fieldsExist == true || $templatesExist == true) {
+			throw new WireException($this->_('Due to the above errors, Dashboard Tasks did not install. Make necessary changes and try again.'));
+		}
+		return true;
+	}
+
+	private function createFields() {
+		$fields = $this->getFieldData();
+		$fieldNames = '';
+		foreach ($fields as $fieldName => $fieldData) {
+			$f = new Field();
+			$f->setImportData($fieldData); //We create from JSON using Field::setImportData()
+			$f->save();
+			$fieldNames .= $fieldName . " ";
+		}
+		$this->message("Dashboard Tasks: Created fields $fieldNames");
+		return $this->createTemplates();
+	}
+
+	private function getFieldData() {
+		$fieldsJSON = file_get_contents(__DIR__ . "/configs/fields.json");
+		return json_decode($fieldsJSON, true);
+	}
+
+	private function createTemplates() {
+		$templates = $this->getTemplateData();
+		$templateNames = '';
+		foreach ($templates as $templateName => $templateData) {
+			$fg = new Fieldgroup();
+			$fg->name = $templateName;
+			$templateNames .= $templateName . " ";
+			foreach ($templateData['fieldgroupFields'] as $fieldname) $fg->add($fieldname);
+			$fg->save();
+			$t = new Template();
+			$t->setImportData($templateData) ;
+			$t->save();
+		}
+		$this->message("Dashboard Tasks: Created templates $templateNames");
+		return $this->extraTemplateSettings();
+	}
+
+	private function extraTemplateSettings() {
+		$allowedChildTemplate = $this->wire('templates')->get("dashboard-task");
+		$pt = $this->wire('templates')->get('dashboard-tasks');
+		$pt->childTemplates = array($allowedChildTemplate->id);
+		$pt->save();
+		$allowedChildTemplate->parentTemplates = array($pt->id);
+		$allowedChildTemplate->save();
+		return $this->createPages();
+	}
+
+	private function getTemplateData() {
+		$templatesJSON = file_get_contents(__DIR__ . "/configs/templates.json");
+		return json_decode($templatesJSON, true);
+	}
+
+	private function createPages() {
+		$a = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+		$parent = $a->child('name=dashboard-tasks');
+		$template = $this->wire('templates')->get('dashboard-tasks');
+
+		$p = new Page();
+		$p->template = $template;
+		$p->parent = $parent;
+		$p->title = "Tasks";
+		$p->addStatus(Page::statusHidden);
+		$p->save();
+
+	}
+}

@@ -1,0 +1,37 @@
+New Job Order
+##############################################################
+
+Leaking at Main Hall Lobby Ceiling
+
+Hi,
+
+I need a plumber to fix leaking at our main hall lobby.
+
+If you're interested and available to do this job please respond to this enquiry and submit your quotes as well.
+
+Thank You,
+Jim
+
+##############################################################
+
+{"titleTag":"Request a plumbing work","taskType":2,"subject":"Leaking at Main Hall Lobby Ceiling","text":"Hi,\n\nI need a plumber to fix leaking at our main hall lobby.\n\nIf you're interested and available to do this job please respond to this enquiry and submit your quotes as well.\n\nThank You,\nJim","submitterID":1913,"submitterName":"task-owner","submitterEmail":"dtowner@uiarch.net","taskOwnerID":1913,"taskOwnerName":"task-owner","taskOwnerEmail":"dtowner@uiarch.net","taskEnquiryType":1,"priority":2,"location":"Main Hall Lobby 1st Fl St Kilda Rd 244 VIC 3000","startDate":"09-Jul-2019","endDate":"16-Jul-2019","startTime":"08:00","endTime":"17:00","textColour":"235, 255, 236, 1.0","backgroundColour":"76, 175, 81, 1.0","limitVisibility":2,"limitVisibilityIDs":[1909],"taskTrn":"trn-2-190709-165038-1913"}
+
+
+##############################################################
+Accepted by Peter
+
+{"titleTag":"Request a plumbing work","taskType":2,"subject":"Leaking at Main Hall Lobby Ceiling","text":"Hi,\n\nI need a plumber to fix leaking at our main hall lobby.\n\nIf you're interested and available to do this job please respond to this enquiry and submit your quotes as well.\n\nThank You,\nJim","submitterID":1913,"submitterName":"task-owner","submitterEmail":"dtowner@uiarch.net","taskOwnerID":1913,"taskOwnerName":"task-owner","taskOwnerEmail":"dtowner@uiarch.net","taskEnquiryType":1,"priority":2,"location":"Main Hall Lobby 1st Fl St Kilda Rd 244 VIC 3000","startDate":"09-Jul-2019","endDate":"16-Jul-2019","startTime":"08:00","endTime":"17:00","textColour":"235, 255, 236, 1.0","backgroundColour":"76, 175, 81, 1.0","limitVisibility":4,"limitVisibilityIDs":[1912,1913],"taskTrn":"trn-2-190709-165038-1913","taskJobAcceptance":1,"taskJobAcceptanceStatus":"accepted","taskJobAcceptanceID":1912,"taskJobAcceptanceName":"task-coworker","taskJobAcceptanceEmail":"dtuser@uiarch.net","taskJobAcceptanceDate":"09-Jul-2019","taskJobAcceptanceTime":"16:51"}
+
+##############################################################
+
+Ok Jim I'm available for this Job.
+
+I'll let you know my quotes before COB
+
+Thank you
+Peter
+
+##############################################################
+Edit by Peter
+
+{"titleTag":"Quotes Attached","taskType":2,"subject":"Leaking at Main Hall Lobby Ceiling","text":"Hi Jim,\n\nPlease find my quotes at doc section\n\nCheers,\nPeter","submitterID":1912,"submitterName":"task-coworker","submitterEmail":"dtuser@uiarch.net","taskOwnerID":1912,"taskOwnerName":"task-coworker","taskOwnerEmail":"dtuser@uiarch.net","priority":1,"location":"I'll come","startDate":"09-Jul-2019","endDate":"23-Jul-2019","startTime":"08:00","endTime":"17:00","textColour":"247, 237, 236, 1.0","backgroundColour":"166, 16, 5, 1.0","limitVisibility":4,"limitVisibilityIDs":[1913,1912],"recipientNames":"task-owner","recipientEmails":"dtowner@uiarch.net","taskTrn":"trn-2-190709-152619-1913"}

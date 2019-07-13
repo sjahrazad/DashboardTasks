@@ -1,0 +1,215 @@
+#pw-footer,.dn_hide {display: none !important;}
+
+/** html **/
+/* Prevent "jump" on shorter pages */
+html {overflow-y:scroll;}
+
+/** heading **/
+/** div#top_pager h2.dn_results_headline {float: left; margin: 0 0 1.5em 0;} **/
+div#top_pager h2.dn_results_headline {font-size:1em;}
+/* div#dn_single_task header {margin-top: 30px} */
+
+/** div **/
+/* div#dn_tasks_container div.dn_task {width: 300px;height: 260px; padding: 15px;} */
+/* @todo: moving width and height inline (configurable) */
+div#dn_tasks_container div.dn_task {padding: 15px;}
+div#dn_tasks_container {clear: both;}
+div#bottom_pager {margin: 1.25em 0;  height: 3.125em;}
+div#dn_create_new_task {margin-top: 10px !important;}
+div.gridTask__overflow {
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	position: relative;
+	background-size: 16px 16px;
+	background-position: 0 0, 8px 8px;
+	/* @todo: padding? */}
+
+div.gridTask__hover {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	padding: 0.4em;}
+
+div.gridTask__inner {position: relative; width: 100%; height: 100%;}
+div.dn_actions_wrapper, div#top_pager {width: 100%;}
+div#dn_actions {padding-right: 1em}
+div.dn_task_footer {padding-right: 10px;}
+div#dn_task_responses {margin-top: 10px;}
+div#dn_task_text {font-size: 1.25em; padding-bottom: 10px;}
+/* @task: we need this to see the button if colour is very pale/light [for pickr colour picker]*/
+div.pcr-button {/* border: 1px solid #d9e1ea;*/outline: #d9e1ea 1px solid;}
+
+/** span **/
+span.dn_task_view_edit {
+	position: absolute;
+	width: 100%;
+	text-align: center;
+	display: none;
+	top: 35%;/* @kongondo for DN */}
+
+.gridTask:hover span.dn_task_view_edit {display: block; }
+span.dn_task_view_edit_divider, span.dn_task_back_edit_divider, span.dn_task_back_view_divider {
+	display: inline-block;
+	margin-right: 10px;
+	margin-left: 10px;
+	font-weight: bolder;
+	color: white;
+	font-size: 1.5em;}
+
+span.dn_task_back_edit_divider, span.dn_task_back_view_divider {font-weight: normal; color: #8d939e; font-size:initial}
+span.dn_task_priority_meta {font-weight: bolder;}
+span.fa span.dn_task_comments_count, span#dn_task_response_label {margin-left: 3px;}
+
+/** form **/
+#dn_tasks_bulk > ul > li, #dn_tasks_bulk > ul > li > div {margin-top: 0; padding-top: 0} /*removes whitespace between h1 and navbar*/
+
+/** input **/
+.gridTask__icon > input {display: none;}
+
+select#dn_action_select {/* margin-right: 0.75em; */ width: 150px; }
+
+/** label **/
+label#dn_action_select_label {margin-right: 0.5em;}
+label.gridTask__icon {display: none;}
+.gridTask:hover label.gridTask__icon:hover {display: block; color: #e83561; background-color: white;}
+
+/** button **/
+/* @todo: revisit these? here we override PW admin theme styling of our colour picker buttons */
+.pcr-app .pcr-interaction .pcr-save {background: #4285f4 !important;}
+.pcr-app .pcr-interaction .pcr-clear {background: #f44250 !important;}
+button#dn_actions_btn {display: none;}
+div#dn_task_responses button.dn_response_reply_btn {margin-top:10px;}
+section#dn_task_responses button.dn_response_reply_btn {margin-top:20px;}
+/** list **/
+div#top_pager .MarkupPagerNav, div#bottom_pager .MarkupPagerNav {float: right;}
+
+ul.dn_tasks_grid {
+	padding: 0;
+	position: relative;
+	margin: 0;
+	margin-right: -.6em;
+	display: grid;
+	list-style: none;
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	grid-auto-rows: auto;}
+
+li.gridTask {
+	display: inline-block;
+	margin: 0 0 0 0;
+	box-shadow: none;
+	list-style: none;}
+
+.gridTask {
+	position: relative;
+	border-radius: 2px;
+	background: #fff;
+	padding: 0.4em;
+	vertical-align: top;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);}
+
+.gridTask__icon {
+	position: absolute;
+	background: white;
+	padding: .2em .6em;
+	color: #aaa;
+	z-index: 2;
+	cursor: pointer;}
+
+.gridTask__edit:hover {color: white; }
+.gridTask:hover .gridTask__inner {background: rgba(62, 185, 152, 0.7);}
+.gridTask__icon--single {display: block !important; position: static;}/*  @todo: needed? */
+.gridTask:hover .gridTask__icon {display: block;}
+.gridTask--select {background-color: #e83561 !important;}
+.gridTask--select .gridTask__icon {background-color: #e83561; color: white; display: block;}
+.gridTask--select .gridTask__icon:hover {background-color: #e83561;}
+.gridTask--select:hover .gridTask__edit, .gridTask--select:hover .gridTask__locked, .gridTask--select:hover .dn_task_view_edit_divider {
+ display: none;}
+.gridTask--select:hover .gridTask__icon:hover {background-color: #e83561;}
+.gridTask--select:hover .gridTask__inner {background: rgba(232, 53, 97, 0.3);}
+
+/** article **/
+/*
+section#dn_task_responses ul.dn_threaded_comments article.uk-comment {background-color:red; padding:10px; border-radius: 10px;}
+*/
+ /** anchor **/
+div#dn_menu a.dn_on {color: #354b60;font-weight: bold;}
+div#dn_menu_actions select {background-color: #ffffff}
+a.gridTask__edit, a.gridTask__locked {
+    display: inline-block;
+    color: white !important;
+    font-size: 1.3em;
+    cursor: move;
+    text-shadow: 0px 0px 7px rgba(62, 185, 152, 0.7);}
+
+div.gridTask__inner a.gridTask__locked { font-size: 1.9em; cursor: not-allowed;}
+a.gridTask__edit {cursor: pointer;}
+/* @task: we've moved this to the span */
+/* .gridTask:hover .gridTask__edit, .gridTask:hover .gridTask__locked {display: block; } */
+a.gridTask__locked {vertical-align: sub;}
+a.dn_create_task, a.dn_back_to_all_tasks, a.dn_back_to_edit {display: inline-block; margin-bottom: 10px !important;}
+div#dn_task_responses a.dn_task_comment_action_reply {display:block; margin-top: 10px;}
+
+.task-subject,.task-sub-header { padding:0; margin:0;}
+.task-subject h2{ font-size: 2em;}
+.task-text p { font-size:1em;}
+#task-footer ul,.task-menu ul,.task-sub-header ul {margin:0; padding:0;list-style: none;}
+
+.task-action { display: grid; grid-template-columns: 20px 20px 20px 20px 20px auto; grid-gap: 15px;}
+.task-date { font-size:small; display: grid; grid-template-columns: 70px auto 100px 100px;}
+.task-list { font-size:small; display: grid; grid-template-columns: 90px auto;grid-gap:5px;}
+.task-meta { font-size:small; display: grid; grid-template-columns: 1fr auto;}
+.task-text { padding: 0 0 20px 0;}
+.txt-right { text-align: right;}
+.txt-bold,.priority-low,.priority-normal,.priority-high  {font-weight:700;}
+.txt-border{border-top:1px solid rgba(15, 50, 75, 0.1);}
+.priority-low,.priority-normal,.priority-high  {font-size:small;}
+.priority-low { background-color: #4CAF50}
+.priority-normal {background-color: #FF9800}
+.priority-high { background-color: #F44336}
+.task-content-menu,.task-content-footer{ text-align:right; font-size:small;}
+.task-content-menu{ padding: 0 0 5px 0; font-weight:700; text-transform: uppercase;}
+.task-content-footer{ padding: 5px 0 5px 0;}
+.task-help{color: gray; background: #ffffff; font-family: Arial, sans-serif; font-size: small; font-weight: bold; font-style: italic; padding: 0}
+
+#dn_threaded_comments_main, #dn_threaded_comments_main ul,#dn_threaded_comments_main ul li{margin-top:10px;}
+.uk-comment-header h4{padding:0; margin:0;}
+.uk-comment-header h4,.uk-comment-meta{font-size:12px;}
+.uk-comment-header{margin:0 0 10px 0;}
+.tasks-nav ul { margin:0 auto; width: 200px; display:grid; list-style:none; grid-template-columns:repeat(auto-fill,minmax(40px,1fr)); grid-auto-rows:30px;}
+.span-doc{width:20px;}
+
+.uk-comment-meta {
+	font-size: 0.875rem;
+	line-height: 1.4;
+}
+
+.uk-comment-list {
+  padding: 0;
+  list-style: none;
+}
+/* Adjacent siblings */
+.uk-comment-list > :nth-child(n+2) {
+  margin-top: 30px;
+}
+/*
+ * Sublists
+ * Note: General sibling selector allows reply block between comment and sublist
+ */
+.uk-comment-list .uk-comment ~ ul {
+  margin: 30px 0 0 0;
+  padding-left: 30px;
+  list-style: none;
+}
+/* Tablet and bigger */
+@media (min-width: 960px) {
+  .uk-comment-list .uk-comment ~ ul {
+    padding-left: 50px;
+  }
+}
+/* Adjacent siblings */
+.uk-comment-list .uk-comment ~ ul > :nth-child(n+2) {
+  margin-top: 30px;
+}

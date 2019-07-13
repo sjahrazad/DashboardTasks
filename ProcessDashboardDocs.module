@@ -1,0 +1,393 @@
+<?php namespace ProcessWire;
+/**
+ * MD Collabs
+ *
+ * Collaboration and Sharing tool for simple tasks
+ * management in a team through Email /SMS.
+ * Document repository for DashboardTasks Module
+ * Monchu MaxDev.com.au
+ *
+ * 7 July 2019
+ * https://github.com/sjahrazad/DashboardTasks
+ *
+ * Based on Dashboard Notes by
+ * Francis Otieno (Kongondo)
+ * @credits: Szabesz - for help with code cleanup and CSS
+ *
+ * ProcessWire 3.x
+ * Copyright (C) 2016 by Ryan Cramer
+ *
+ * Licensed under MIT v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ *
+ */
+
+class ProcessDashboardDocs extends Process implements Module {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'MD COLLABS Documents',
+			'summary' => 'DashboardTasks Module: Optional for Files Attachment',
+			'author' => 'Monchu',
+			'version' => '0.0.1',
+			'href' => 'https://maxdev.com.au/',
+			'singular' => true,
+			'autoload' => false,
+			'permission' => 'dashboard-tasks',
+			'requires' => 'ProcessDashboardTasks'
+		);
+	}
+
+	const PAGE_NAME = 'dashboard-docs';
+
+	public function init() {
+		parent::init();
+	}
+
+	public function ___execute() {
+		
+		$settingsParent = $this->wire('config')->urls->admin."dashboard-tasks/";
+		$limitSettings = $this->wire('pages')->get('template=dashboard-tasks,parent='.$settingsParent.',include=all');
+		$limitDocs = json_decode($limitSettings->dashboard_tasks_settings)->displayMax;	
+		$headtask = json_decode($limitSettings->dashboard_tasks_settings)->taskGlobalTaskLabel;		
+		$headline = json_decode($limitSettings->dashboard_tasks_settings)->taskDocumentsLabel;
+		$background = json_decode($limitSettings->dashboard_tasks_settings)->backgroundColour;	
+		$myTasks =$this->pages->find("template=dashboard-task,limit=".$limitDocs.",created_users_id=".$this->wire('user')->id.",include=all,sort=title");
+					
+		$docName ="";
+		$out = '';
+		$this->headline($headline);
+		$out .= "<section style='border-top:3px solid rgba(".$background."); border-bottom:10px solid rgba(".$background.");'>";
+		
+		if (count($myTasks)) {		
+			$modules = $this->wire('modules');
+
+			$form = $modules->get('InputfieldForm');
+			$form->attr('enctype', 'multipart/form-data');
+			$form->action = './';
+			$form->method = 'post';
+
+			$f = $modules->get('InputfieldMarkup');
+			$f->id = 'tabletasks';
+			$f->label = $headtask.' List';
+			$f->value = $this->renderTable();
+			$f->columnWidth = 100;
+			$f->collapsed = 1;
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_doc_page_id');
+			//$f->attr('value', (int) $doc->id);
+			$form->add($f);
+
+			$f = $modules->get('InputfieldHidden');
+			$f->attr('name', 'dn_doc_title');
+			//$f->attr('value', $doc->title);
+			$form->add($f);
+
+			$fieldset = $this->modules->get('InputfieldFieldset');			
+			$fieldset->label = $this->_('Attach Document to your').' '.$headtask;
+			$f = $modules->get("InputfieldSelect");
+			$f->attr('name','dn_doc_reference');
+			$f->addOption("","");
+			foreach($myTasks as $item) {
+				$f->addOption($item->name,$item->title);
+			}
+			$f->required = 1;
+			$f->label 		= $this->_('Select').' '.$headtask;
+			$fieldset->add($f);
+
+			// apply (save) button
+			$f = $modules->get('InputfieldSubmit');
+			$f->attr('id+name', 'dn_task_add_doc_btn');
+			$f->attr('value', $this->_('Next'));
+			$f->showIf = 'dn_doc_reference!=""';
+			$fieldset->add($f);
+
+			$form->add($fieldset);
+
+			// post: saving single new or edited task
+			$post = $this->wire('input')->post;
+			if($post->dn_task_add_doc_btn) $this->save($form);
+
+			$out .= $form->render();
+			$out .= "</section>";
+			$out .= $this->renderDocMenu();
+			$out .= $this->renderFooterMenu();		
+			return $out;			
+		}
+		
+		else {
+			if($headtask == "") $out .= "
+				<p>Hi ".$this->wire('user')->name.", you need to configure the Global Settings first before use this module.</p>
+				<p><button class='uk-button uk-button-default'><a href='/dashboard/dashboard-tasks/settings/'>Global Settings</a></button></p>
+			";
+			if($headtask != "") $out .= "<p>Hi ".$this->wire('user')->name.", you don't have any document attached yet.</p>";
+			if($headtask != "") $out .= "<p>Start to create your new Collabs Task here <button class='uk-button uk-button-default'><a href='/dashboard/dashboard-tasks/edit/'>Add New MD Collabs</a></button></p>";
+			$out .= "</section>";
+			if($headtask != "") $out .= $this->renderDocMenu();
+			$out .= $this->renderFooterMenu();			
+			return $out;
+		}
+		
+
+		//return $out;		
+	}
+
+
+	public function renderTable() {
+		$settingsParent = $this->wire('config')->urls->admin."dashboard-tasks/";
+		$limitSettings = $this->wire('pages')->get('template=dashboard-tasks,parent='.$settingsParent.',include=all');
+		$limitDocs = json_decode($limitSettings->dashboard_tasks_settings)->displayMax;
+		$headtask = json_decode($limitSettings->dashboard_tasks_settings)->taskGlobalTaskLabel;		
+		$headline = json_decode($limitSettings->dashboard_tasks_settings)->taskDocumentsLabel;
+		
+		$table = $this->modules->get('MarkupAdminDataTable');
+		$table->id = 'tabletasks';
+		$table->setSortable(true);
+		$table->headerRow([$headtask, 'Created']);
+		$table->addClass('uk-table-striped');
+
+		foreach($this->pages->find("template=dashboard-task,limit=".$limitDocs.",created_users_id=".$this->wire('user')->id.",include=all,sort=title") as $item) {
+			$docName = "doc-".substr($item->name,4,25);
+			$taskCreated = date('d M Y',$item->modified);
+			$table->row([$item->title => $this->wire('config')->urls->admin."dashboard-tasks/edit/".$item->id, $taskCreated] );
+		}
+		return $table->render();
+	}
+
+	private function renderDocMenu() {
+		$out = '';
+
+		$out .=
+			"<section id='tasks-nav' class='tasks-nav'>" .
+				"<ul id='tasks-nav-menu' class='tasks-nav-menu'>" .
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-tasks/edit/'><i class='fa fa-lg fa-plus-circle'></i></a></li>" .
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-tasks/'><i class='fa fa-lg fa-tasks'></i></a></li>" .
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-docs/'><i class='fa fa-lg fa-file'></i></a></li>" .
+					"<li><a href='".$this->wire('config')->urls->admin."dashboard-tasks/help/'><i class='fa fa-lg fa-info-circle'></i></a></li>" .
+				"</ul>" .
+			"</section>";
+
+		return $out;
+	}
+	private function renderFooterMenu() {
+		$out = '';
+		$out .= "<section id='task-content-footer' class='task-content-footer'>MD Collabs V0.01<br /><a href='https://maxdev.com.au'>MaxDev.com.au</a></section>";
+		return $out;
+	}
+	/* ######################### - INSTALL - ######################### */
+	public function ___install() {
+		$taskPage = $this->wire('pages')->find("template=admin, name=dashboard-tasks");
+		if (!count($taskPage))
+			 throw new WirePermissionException("Failed. DashboardTasks module is required.");
+
+		if($this->verifyInstall($mode = null) == true) {
+			$page = new Page();
+			$page->template = 'admin';
+			$page->parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+			$page->title = 'My Documents';
+			$page->name = self::PAGE_NAME;
+			$page->process = $this;
+			$page->save();
+
+			$this->verifyInstall($mode = 1);
+			$this->message("Docs: Created page {$page->path}");
+
+		}
+		else throw new WireException($this->_('Dashboard Docs: Installation aborted. Check and fix reported errors first.'));
+	}
+
+	public function ___uninstall() {
+		$pages = $this->wire('pages');
+
+		$moduleID = $this->wire('modules')->getModuleID($this);
+		$dtPage = $pages->get("template=admin, process=$moduleID, name=" . self::PAGE_NAME);
+
+		if($dtPage->id) {
+			$this->message($this->_('Dashboard Docs: Deleted Page: ') . $dtPage->path);
+			$pages->delete($dtPage, true);
+		}
+
+		$templates = array('dashboard-doc', 'dashboard-docs');
+
+		foreach ($templates as $template) {
+			$t = $this->wire('templates')->get($template);
+			if($t->id) {
+				$this->wire('templates')->delete($t);
+				$this->wire('fieldgroups')->delete($t->fieldgroup);
+			}
+		}
+
+		$this->message('Dashboard Docs: Deleted Templates dashboard-doc and dashboard-docs');
+
+		$fields = array('dashboard_task_body', 'dashboard_task_files', 'dashboard_task_images','dashboard_task_url_reference');
+
+		foreach ($fields as $field) {
+			$f = $this->wire('fields')->get($field);
+			if($f->id) $this->wire('fields')->delete($f);
+		}
+		$this->message('Dashboard Docs: Deleted Fields dashboard_task_body, dashboard_task_files, dashboard_task_images and dashboard_task_url_reference');
+
+		//$this->wire('cache')->delete("dashboard-docs");
+
+	}
+
+	public function verifyInstall($mode = null) {
+		$pageCheck = '';
+
+		if($mode == 1) return $this->createFields();
+
+		$parent = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+		$page = $this->wire('pages')->get("parent=$parent, template=admin, include=all, name=".self::PAGE_NAME);
+
+		if($page->id && $page->id > 0) $pageCheck = $page->title;
+
+		$pageExist = $pageCheck ? true : false;
+
+		$fields  = array(
+			'docs' => 'dashboard_task_body',
+			'files' => 'dashboard_task_files',
+			'images' => 'dashboard_task_images',
+			'reference' => 'dashboard_task_url_reference'
+			);
+
+		$fieldsCheck = array();
+		foreach ($fields as $key => $value) {if($this->wire('fields')->get($value)) $fieldsCheck [] = $this->wire('fields')->get($value)->name;}
+		$fieldsExist = count($fieldsCheck) ? true : false;
+
+		$templates = array(
+			'docs' => 'dashboard_task_body',
+			'files' => 'dashboard_task_files',
+			'images' => 'dashboard_task_images',
+			'reference' => 'dashboard_task_url_reference'
+			);
+
+		$templatesCheck = array();
+		foreach ($templates as $template) {if($this->wire('templates')->get($template)) $templatesCheck [] = $this->wire('templates')->get($template)->name;}
+
+		$templatesExist = count($templatesCheck) ? true : false;
+
+		if($pageExist == true ) {
+			$failedPage = $pageCheck;
+			$this->error($this->_("Cannot install Dashboard Tasks Admin page. A page named 'dashboard-docs' is already in use under Admin. Its title is: {$failedPage}."));
+		}
+
+		if($fieldsExist == true){
+			$failedFields = implode(', ', $fieldsCheck);
+			$this->error($this->_("Cannot install Dashboard Docs fields. Some field names already in use. These are: {$failedFields}."));
+		}
+
+		if($templatesExist == true){
+			$failedTemplates = implode(', ', $templatesCheck);
+			$this->error($this->_("Cannot install Dashboard Docs templates. Some template names already in use. These are: {$failedTemplates}."));
+		}
+
+		if($pageExist == true || $fieldsExist == true || $templatesExist == true) {
+			throw new WireException($this->_('Due to the above errors, Dashboard Docs did not install. Make necessary changes and try again.'));
+		}
+
+		return true;
+	}
+
+	private function save($form) {
+		$post = $this->wire('input')->post;
+		// process form
+		$form->processInput($post);
+
+		// save new task or edit existing task
+		if ($post->dn_task_add_doc_btn) $this->saveAddDoc($post);
+
+	}
+
+	private function saveAddDoc($post) {
+		$errors = false;
+		$success = false;
+
+		$pages = $this->wire('pages');
+		$sanitizer = $this->wire('sanitizer');
+		$session = $this->wire('session');
+		$user = $this->wire('user');
+		$parent = $this->wire('page')->child('include=all');
+
+		$docReference = $sanitizer->text($post->dn_doc_reference);
+
+		$docFiles = $parent->child("name={$docReference}, include=all")->id;
+		//$reference = $this->wire('pages')->get("template=dashboard-task, include=all, name=$docReference");
+			if($docFiles) {
+				$session->redirect($this->wire('config')->urls->admin."page/edit/?id=".$docFiles);
+			} else {
+				$page = new Page();
+				$page->template = "dashboard-doc";
+				$page->parent = $parent;
+				$page->name = $docReference;
+				$page->title = strtoupper($docReference);
+				$page->save();
+				$success = true;
+				$session->redirect($this->wire('config')->urls->admin."page/edit/?id=".$page->id);
+			}
+	}
+
+	private function createFields() {
+		$fields = $this->getFieldData();
+		$fieldNames = '';
+		foreach ($fields as $fieldName => $fieldData) {
+			$f = new Field();
+			$f->setImportData($fieldData); //We create from JSON using Field::setImportData()
+			$f->save();
+			$fieldNames .= $fieldName . " ";
+		}
+		$this->message("Tasks Document: Created fields $fieldNames");
+		return $this->createTemplates();
+	}
+
+	private function getFieldData() {
+		$fieldsJSON = file_get_contents(__DIR__ . "/configs/docs-fields.json");
+		return json_decode($fieldsJSON, true);
+	}
+
+	private function createTemplates() {
+		$templates = $this->getTemplateData();
+		$templateNames = '';
+		foreach ($templates as $templateName => $templateData) {
+			$fg = new Fieldgroup();
+			$fg->name = $templateName;
+			$templateNames .= $templateName . " ";
+			foreach ($templateData['fieldgroupFields'] as $fieldname) $fg->add($fieldname);
+			$fg->save();
+			$t = new Template();
+			$t->setImportData($templateData) ;
+			$t->save();
+		}
+		$this->message("Tasks Document: Created templates $templateNames");
+		return $this->extraTemplateSettings();
+	}
+
+	private function extraTemplateSettings() {
+		$allowedChildTemplate = $this->wire('templates')->get("dashboard-doc");
+		$pt = $this->wire('templates')->get('dashboard-docs');
+		$pt->childTemplates = array($allowedChildTemplate->id);
+		$pt->save();
+		$allowedChildTemplate->parentTemplates = array($pt->id);
+		$allowedChildTemplate->save();
+		return $this->createPages();
+	}
+
+	private function getTemplateData() {
+		$templatesJSON = file_get_contents(__DIR__ . "/configs/docs-templates.json");
+		return json_decode($templatesJSON, true);
+	}
+
+	private function createPages() {
+		$a = $this->wire('pages')->get($this->wire('config')->adminRootPageID);
+		$parent = $a->child('name=dashboard-docs');
+		$template = $this->wire('templates')->get('dashboard-docs');
+		$p = new Page();
+		$p->template = $template;
+		$p->parent = $parent;
+		$p->title = "Docs";
+		$p->addStatus(Page::statusHidden);
+		$p->save();
+	}
+}
