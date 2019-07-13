@@ -2,6 +2,8 @@
 
 MD COLLABS, MaxDev Collaboration & Sharing Tool is a simple management task module; a plugin runs on Processwire CMF Framework.
 
+https://modules.processwire.com/modules/process-dashboard-tasks/
+
 This module allows you to track interactions in your team through your Email application; furthermore, you can collaborate and share your task instantly from the web site.
 
 This module modified from Kongondo Dashboard Notes at https://processwire.com/talk/topic/20980-dashboard-notes/
