@@ -2488,7 +2488,7 @@ class ProcessDashboardTasks extends Process implements Module {
 			if ($taskPriority == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_tasks_3.png' /></a>";
 		}
 
-		if ($taskType == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_mom.png' /></a>";
+		if ($taskType == 3) $btnOpenTask = "<a href='https://{$domainName}{$adminURL}dashboard-tasks/view/{$page->id}/'><img src='{$domainName}/site/modules/DashboardTasks/vendor/images/button_open_my_notes.png' /></a>";
 
 		// Settings for Microsoft Outlook back to the old css inline
 		$thStyle1  = "style='text-align: center; color: #153643; background: #e1f5fe; font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; padding: 10px 0 10px 10px'";
@@ -2521,8 +2521,8 @@ class ProcessDashboardTasks extends Process implements Module {
 
 		$autoMsg .= "
 			<p>Dear <strong>{$user->name}</strong>,</p>
-			<p>Your Task {$tTask} in regard to <strong>{$taskSubject}</strong> subject has been created. For correspondence reference, your Ticket Reference Number is <strong>{$page->name}</strong></p>
-			<p><strong>Your Task Content:</strong></p>
+			<p>{$tTask} <strong>{$taskSubject}</strong> has been created.</p>
+			<p><strong>Task Content:</strong></p>
 			<p>{$bodyText}</p>
 			<p><strong>{$this->settings->taskGlobalMembersLabel}:</strong></p>
 			<p>{$recipientMsg}</p>
@@ -2530,6 +2530,7 @@ class ProcessDashboardTasks extends Process implements Module {
 			<p>Thank You.</p>
 		";
 		$autoMsg .= $bodyFooter;
+		$autoMsg .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 12px; padding: 20px 10px 0 10px; text-align:right; border-top: 1px solid #ccc;'>For correspondence reference, your Ticket Reference Number is <strong>{$page->name}</strong></p>";
 		$autoMsg .= $copyRight;
 
 		/**
