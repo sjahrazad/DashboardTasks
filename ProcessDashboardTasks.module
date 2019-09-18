@@ -184,7 +184,9 @@ class ProcessDashboardTasks extends Process implements Module {
 		else {
 			$settingsParent = $this->wire('config')->urls->admin."dashboard-tasks/";
 			$limitSettings = $this->wire('pages')->get('template=dashboard-tasks,parent='.$settingsParent.',include=all');
-			$headtask = json_decode($limitSettings->dashboard_tasks_settings)->taskGlobalTaskLabel;
+
+			if ($limitSettings->dashboard_tasks_settings != "") $headtask = json_decode($limitSettings->dashboard_tasks_settings)->taskGlobalTaskLabel;
+			if ($limitSettings->dashboard_tasks_settings == "") $headtask = "Task";
 
 			$out = '';
 			if(($headtask == "") && ($this->wire('user')->hasRole('task-manager'))) {
