@@ -24,9 +24,13 @@ There are three roles for this module, task-user (co-worker), task-owner (task c
 The installer created five demo users, task-manager, task-owner and three task-coworkers. For the first time log-in user, before using the module, a task manager role required to configure the Global Settings.
 
 user name: task-manager, password: task-manager, email: task-manager@yourdomainname
+
 user name: task-owner password: task-owner, email: task-owner@yourdomainname
+
 user name: task-coworker1 password: task-coworker1, email: task-coworker1@yourdomainname
+
 user name: task-coworker2 password: task-coworker2, email: task-coworker2@yourdomainname
+
 user name: task-coworker3 password: task-coworker3, email: task-coworker3@yourdomainname
 
 Change those emails with your test emails.
