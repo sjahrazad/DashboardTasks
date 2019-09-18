@@ -473,7 +473,8 @@ class ProcessDashboardTasks extends Process implements Module {
 	public function ___executeEdit() {
 
 		$task = $this->task;
-
+$edate ="";
+$sdate ="";
 		/**
 		 * Task Status Lock or Case Closed
 		 * Redirect
@@ -489,14 +490,20 @@ class ProcessDashboardTasks extends Process implements Module {
 			$this->wire('session')->redirect($this->baseURL);
 		}
 
-		if ($task->dashboard_tasks_settings->taskJobAcceptanceName == $user->name) $editOther = true;
-		if ($task->dashboard_tasks_settings->taskJobAcceptanceName != $user->name) $editOther = $this->checkEdit($task);
+		if ((!$this->wire('user')->hasRole('task-owner')) || (!$this->wire('user')->hasRole('task-manager'))) {
+			if (($task->id)&&($task->taskType == 2)) {
+				if (!empty($task->dashboard_tasks_settings->taskJobAcceptanceName)) {		
+					if ($task->dashboard_tasks_settings->taskJobAcceptanceName == $user->name) $editOther = true;
+					if ($task->dashboard_tasks_settings->taskJobAcceptanceName != $user->name) $editOther = $this->checkEdit($task);
 
-		if((!$this->checkAccess($this->task)) || (!$editOther)) {
-			$this->error($this->_('You have no access to this task!'));
-			$this->wire('session')->redirect($this->baseURL);
+					if((!$this->checkAccess($this->task)) || (!$editOther)) {
+						$this->error($this->_('You have no access to this task!'));
+						$this->wire('session')->redirect($this->baseURL);
+					}
+				}				
+			}			
 		}
-
+					
 		$out = '';
 		$out .= "<section style='border-top:3px solid rgba(".$this->settings->backgroundColour."); border-bottom:10px solid rgba(".$this->settings->backgroundColour.");'>";
 		$modules = $this->wire('modules');
@@ -751,7 +758,7 @@ class ProcessDashboardTasks extends Process implements Module {
 
 		$f = $modules->get("InputfieldDatetime");
 		$f->name = 'dn_task_date_from';
-		if($task->id) $f->attr('value', $sdate);
+		if(($task->taskType == 2)&&($task->id)) $f->attr('value', $sdate);
 		if(!$task->id) $f->attr('value', $task->startDate);
 		$f->label = $this->_('Start Date');
 		$f->dateOutputFormat = wire('config')->dateFormat;
@@ -785,7 +792,7 @@ class ProcessDashboardTasks extends Process implements Module {
 
 		$f = $modules->get("InputfieldDatetime");
 		$f->name = 'dn_task_date_end';
-		if($task->id) $f->attr('value', $edate);
+		if(($task->taskType == 2)&&($task->id)) $f->attr('value', $edate);
 		if(!$task->id) $f->attr('value', $task->endDate);
 		$f->label = $this->_('Due Date');
 		$f->dateOutputFormat = wire('config')->dateFormat;
@@ -3844,6 +3851,7 @@ class ProcessDashboardTasks extends Process implements Module {
 		$p->template = $template;
 		$p->parent = $parent;
 		$p->title = "Tasks";
+		$p->dashboard_tasks_settings = '{"companyName":"Company Brand Name","companyEmail":"info@yourdomainname.com","companyPhone":"+6100000000","companyAddress":"Your Location","taskGlobalTaskLabel":"Tasks","taskGlobalRespondLabel":"Messages","taskGlobalLocationLabel":"Location","taskGlobalMembersLabel":"Members","taskGlobalManagersLabel":"Task Manager","taskGlobalOwnersLabel":"Task Owner","taskGlobalCoworkersLabel":"Task Co-worker","taskGlobalSubmittedLabel":"Submitted","taskGlobalButtonSaveLabel":"Save Draft","taskGlobalButtonSaveSentLabel":"Save & Send Email","taskGlobalButtonRespondLabel":"Reply","taskGlobalButtonEditDocumentLabel":"Attachment","taskNotesLabel":"Notes","taskSchedulerLabel":"Task Scheduler","taskReportsLabel":"Reports","taskDocumentsLabel":"Documents","dateFormat":1,"dateMonthLabel":2,"textColour":"28,40,37,1.0","backgroundColour":"62,185,152,.2","sort":1,"sortDir":2,"editOther":2,"deleteOther":2,"displayMax":20,"maxReply":2,"truncateMax":80,"width":80,"height":10}';
 		$p->addStatus(Page::statusHidden);
 		$p->save();
 
