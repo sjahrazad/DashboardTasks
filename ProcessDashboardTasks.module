@@ -331,7 +331,7 @@ class ProcessDashboardTasks extends Process implements Module {
 
 		if(($this->wire('user')->name == $task->createdUser->name) ||  ($this->wire('user')->name == $task->taskJobAcceptanceName))
 			$taskSubject = "<a href='".$this->wire('config')->urls->admin."dashboard-tasks/edit/".$task->id."/'><i class='fa fa-pencil fa-lg'></i>".$task->subject."</a>";
-		//if($this->wire('user')->name != $task->taskJobAcceptanceName) $taskSubject = $task->subject;
+		if($this->wire('user')->name != $task->createdUser->name) $taskSubject = $task->subject;
 
 		$author = $task->createdUser->name;
 
@@ -1955,7 +1955,7 @@ class ProcessDashboardTasks extends Process implements Module {
 
 		######## JOB ACCEPTANCE #######
 		if(($task->taskEnquiryType == 1) && ($task->taskJobAcceptance != 1)) {
-			if ($this->wire('user')->hasRole('task-user')) {
+			if (($this->wire('user')->hasRole('task-user')) && ( $this->wire('user')->name != $task->taskOwnerName)) {
 				$f = $modules->get('InputfieldRadios');
 				$f->attr('name', 'dn_task_job_acceptance');
 				$f->attr('value', 2);
