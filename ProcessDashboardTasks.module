@@ -473,8 +473,9 @@ class ProcessDashboardTasks extends Process implements Module {
 	public function ___executeEdit() {
 
 		$task = $this->task;
-$edate ="";
-$sdate ="";
+		$edate ="";
+		$sdate ="";
+
 		/**
 		 * Task Status Lock or Case Closed
 		 * Redirect
@@ -492,7 +493,7 @@ $sdate ="";
 
 		if ((!$this->wire('user')->hasRole('task-owner')) || (!$this->wire('user')->hasRole('task-manager'))) {
 			if (($task->id)&&($task->taskType == 2)) {
-				if (!empty($task->dashboard_tasks_settings->taskJobAcceptanceName)) {		
+				if (!empty($task->dashboard_tasks_settings->taskJobAcceptanceName)) {
 					if ($task->dashboard_tasks_settings->taskJobAcceptanceName == $user->name) $editOther = true;
 					if ($task->dashboard_tasks_settings->taskJobAcceptanceName != $user->name) $editOther = $this->checkEdit($task);
 
@@ -500,10 +501,10 @@ $sdate ="";
 						$this->error($this->_('You have no access to this task!'));
 						$this->wire('session')->redirect($this->baseURL);
 					}
-				}				
-			}			
+				}
+			}
 		}
-					
+
 		$out = '';
 		$out .= "<section style='border-top:3px solid rgba(".$this->settings->backgroundColour."); border-bottom:10px solid rgba(".$this->settings->backgroundColour.");'>";
 		$modules = $this->wire('modules');
@@ -2269,8 +2270,8 @@ $sdate ="";
 
 		// Priority 1 colours for Task Scheduler only
 		if (($taskPriority == 1) && ($taskType == 2)) {
-			$settingsArray['textColour'] = "rgba('255,255,255,1')";
-			$settingsArray['backgroundColour'] = "rgba('250,20,0,1')";
+			$settingsArray['textColour'] = "255,255,255,1";
+			$settingsArray['backgroundColour'] = "250,20,0,1";
 		}
 		else {
 			$settingsArray['textColour'] = str_replace(array("rgba(", ")"), "", $post->dn_task_text_colour);
