@@ -460,9 +460,9 @@ class ProcessDashboardTasks extends Process implements Module {
 
 		$out .=		$docFile .
 				"</section>
-				<details><summary><h3>{$this->settings->taskGlobalRespondLabel}</h3></summary>" .
+				<h3>{$this->settings->taskGlobalRespondLabel}</h3>" .
 				$this->renderReplyMarkup();
-		$out .= "</details>";
+		//$out .= "</details>";
 		$out .= "</div>";
 		$out .= "</section>";
 		$out .= $this->renderTaskMenu();
