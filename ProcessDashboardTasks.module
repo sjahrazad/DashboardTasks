@@ -3000,9 +3000,10 @@ class ProcessDashboardTasks extends Process implements Module {
 
 					##### Send Email #####
 					$bodyText = '';
-					$bodyText .= "<p>Hi <strong>{$page->submitterName}</strong>,<br /><br />You have got a respond in the thread messages from this task's subject: <i>{$page->subject}</i>. </p>";
-					$bodyText .= "<p>Messages from <strong>{$user->name}</strong>:</p>";
+					$bodyText .= "<p>Hi <strong>{$page->submitterName}</strong>,</p>";
+					//$bodyText .= "<p>Messages from <strong>{$user->name}</strong>:</p>";
 					$bodyText .= "<p>".$text."</p>";
+					$bodyText .= "<p>Respond from <strong>{$user->name}</strong></p><p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; text-align: right;'><i>Thread messages subject: {$page->subject}</i></p>";
 
 					$domainName = $this->wire('config')->httpHost;
 					$adminURL = $this->wire('config')->urls->admin;
@@ -3035,7 +3036,7 @@ class ProcessDashboardTasks extends Process implements Module {
 					$bodyHTML .= "</td></tr></table></body></html>\n\n";
 
 					$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 14px; font-weight:bold; padding: 0 10px 0 10px'>{$companyName}</p>";
-					$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 0 10px 0 10px'>{$companyAddress}<br />{$companyAddress}</p>";
+					//$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; padding: 0 10px 0 10px'>{$companyAddress}<br />{$companyAddress}</p>";
 
 					$bodyHTML .= "<p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 12px; padding: 0 10px 0 10px'><strong>DISCLAIMER:</strong><br /><i>The content of this message is confidential. If you have received it by mistake, please inform us by an email reply to {$companyEmail} and then delete the message. It is forbidden to copy, forward, or in any way reveal the contents of this message to anyone. The integrity and security of this email cannot be guaranteed over the Internet. Therefore, the sender will not be held liable for any damage caused by the message.</i>{$copyRight}";
 
