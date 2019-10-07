@@ -475,7 +475,7 @@ class ProcessDashboardTasks extends Process implements Module {
 		$task = $this->task;
 		$edate ="";
 		$sdate ="";
-
+		$roleDefaultID ="";
 		/**
 		 * Task Status Lock or Case Closed
 		 * Redirect
@@ -2778,8 +2778,10 @@ class ProcessDashboardTasks extends Process implements Module {
 
 				// if users cannot delete each others tasks, skip if current user is not the task author
 				if(($this->settings->deleteOther == 2 && $page->createdUser != $this->wire('user')) || ($page->is(Page::statusLocked))){
-					$j++;
-					continue;
+					if (!$this->wire('user')->hasRole('superuser')) {
+						$j++;
+						continue;
+					}
 				}
 				// delete
 				if('delete' == $action) {
@@ -3065,9 +3067,11 @@ class ProcessDashboardTasks extends Process implements Module {
 
 				##### Send Email #####
 				$bodyText = '';
-				$bodyText .= "<p>Hi <strong>{$page->submitterName}</strong>,<br /><br />You have got a respond in regard to this task's subject: <i>{$page->subject}</i>. </p>";
-				$bodyText .= "<p>Messages from <strong>{$user->name}</strong>:</p>";
+				$bodyText .= "<p>Hi <strong>{$page->submitterName}</strong>,</p>";
+				//$bodyText .= "<p>Messages from <strong>{$user->name}</strong>:</p>";
 				$bodyText .= "<p>".$taskResponseText."</p>";
+
+				$bodyText .= "<p>Respond from <strong>{$user->name}</strong></p><p style='color: #000000; background: #ffffff; font-family: Arial, sans-serif; font-size: 11px; text-align: right;'><i>Thread messages subject: {$page->subject}</i></p>";
 
 				$domainName = $this->wire('config')->httpHost;
 				$adminURL = $this->wire('config')->urls->admin;
